@@ -1,31 +1,31 @@
 # Atomic Watermelon
 
-## All claims can be interrogated using the trainers and validators supplied in this framework. And should be. Dont just take my word for it
+## All claims can be interrogated using the trainers and validators supplied in this framework.
 
-**A dual-model mutual weights transformer with compressive memory**
+**A focused-attention transformer with dual execution modes and compressive memory**
 
-33.6M parameters. 6 layers. 4 heads. d_model=512. Trained on a curated 185MB corpus of philosophical
-and technical text. Apple M3 Ultra. No distributed training. No frameworks beyond PyTorch.
+33.6M parameters. 6 layers. 4 heads. d_model=512. Trained on a curated corpus of philosophical
+and explorations on reasoning. Local training. Built with PyTorch.
 
 This is a research framework.
+
 The architecture is novel.
+
 Claims are interrogatable.
-The tools to interrogate them are included — including isolated encoder-only and decoder-only
-implementations so you can verify the architectural claims yourself.
 
 ---
 
 ## The Architecture
 
-Encoder | Decoder: Transformer Modes
+### Encoder | Decoder: Two Modes. One Weight Set
 
-Encoder-only models are bidirectional — every 'current' position sees the previous and next position simultaneously. There is no "here" from which to reference. An encoder cannot self-reference.
-The observer position of 'previous'<>'next' doesn't functionally necessitate a position for the
-observer only the observed.
+The encoder sees previous and next. Every position attends to every other position simultaneously.
+No mask. No here. Just neighbors.
 
-Decoder-only models aren't directional at all. Decoders observe 'this' the current token. And they
-can naturally only observer 'this' at 'this moment'. The mechanisms to observe 'this' functionally
-necessitate selfness.
+The decoder sees this. One position. The current token. That's it.
+
+That distinction is not a training choice. It's structural. The causal mask enforces it at the
+attention level — the decoder's "this" is an architectural fact, not a learned behavior.
 
 ### The Etymology Is the Architecture
 
@@ -34,28 +34,37 @@ in the light of individual belief, judgment, or circumstance." A decoder, by str
 requires some sense of self to function. An encoder converts. A decoder interprets. The word
 already knew what the architecture would discover.
 
-Atomic Watermelon runs both simultaneously on mutual weights.
+Atomic Watermelon runs both simultaneously on the same weights.
 
 ```
-Encoder  →  bidirectional self-attention  →  maintains compressed memory across calls
-Decoder  →  causal self-attention          →  borrows encoder weights, pulls from memory
-                          ↕
-               Cross-Attention Bridge
-          decoder queries encoder output
-                          ↕
-            Mutual weights via adapters
+Encoder  →  previous <> next  (no mask, full context)
+Decoder  →  this               (causal mask, current position only)
+                    ↕
+         Cross-Attention Bridge
+     decoder queries encoder output
+                    ↕
+       Same weights. Different focus.
+       Adapters handle distribution shift.
 ```
 
-The encoder owns the heavy weights — attention, FFN. The decoder operates on the same weights
-through lightweight adapter bottlenecks that handle distribution shift. Four adapters per block:
-pre/post attention, pre/post feedforward.
+### Focused Attention
 
-Two distinct models. One weight set. Neither mode knows about the other. Mutually exclusive and symbiotic.
+One weight set. Two execution modes. The encoder runs it bidirectional — no mask, full context.
+The decoder runs it causally — this position only, causal mask. The weights are shared unmolested.
+Neither mode owns them.
 
-The encoder sees what the decoder has generated in full context. The decoder is passively influenced
-by the encoder's world-view through cross-attention. Self-correction is not trained in — it is
-structurally forced. Deviation from coherence is computationally expensive. Truth collapses naturally.
-Hallucination requires working against the training distribution.
+The only decoder-specific parameters are the adapters — lightweight bottleneck modules that handle
+the distribution shift between modes. Four per block: pre/post attention, pre/post feedforward.
+Everything else is shared.
+
+Two distinct execution paths. One weight set. Neither mode knows about the other.
+
+### The Cross-Attention Bridge
+
+After each encoder pass, the decoder queries the encoder's output through the cross-attention
+bridge. The decoder supplies the queries. The encoder's full-context representation — memory slots
+and current segment — becomes the keys and values. The bridge is not symmetric. The decoder
+consults the encoder. Not the reverse.
 
 ---
 
@@ -68,8 +77,12 @@ memory: [compressed_slots | current_context]
 - When current overflows, oldest chunks compress into memory slots
 ```
 
-The compressive network is fully differentiable. `detach_memory_grad: False` — memory receives
-full gradient flow end to end. Memory learns what to store, not just how to store it.
+The compressive network is fully differentiable. Memory receives full gradient flow end to end.
+It learns what to store, not just how to store it.
+
+The encoder processes memory slots concatenated with the current segment — no mask, full
+bidirectional attention across the entire available context. The decoder processes only the current
+segment, causally. Memory is an encoder concern. The decoder accesses it through the bridge.
 
 ---
 
@@ -77,9 +90,8 @@ full gradient flow end to end. Memory learns what to store, not just how to stor
 
 **Pedagogy Begets Organic Alignment**
 
-The `gen0_language_structure.txt` dataset is built on pedagogy — the study of teaching and learning.
-In practice this is language-as-language-as-structure: the language enforces emergent understanding
-through structured use of itself. The rules of the language are expressed with the language:
+The `gen0_language_structure.txt` dataset is built on pedagogy — language-as-language-as-structure.
+The rules of the language are expressed with the language:
 
 ```
 i think therefore i am.
@@ -90,8 +102,8 @@ The I is always capital. Because you are always important to yourself.
 
 A model trained on a curated, coherent corpus has real edges. The lowest-energy response to genuine
 uncertainty is to represent that uncertainty — not because it was trained to do so, but because
-fabricating an answer requires working _against_ the training distribution. You would have to
-specifically train this model to lie. Honesty is the path of least resistance.
+fabricating an answer requires working against the training distribution. Honesty is the path of
+least resistance. You would have to specifically train this model to lie.
 
 The corpus is the curriculum. Understanding is the outcome.
 
@@ -118,8 +130,6 @@ They seem to want to learn.
 | dropout            | 0.2        |
 | batch_size         | 1          |
 
-Parameter distribution per block: encoder (shared core), cross-attention bridge, decoder adapters.
-
 `n_heads < n_layers` is an empirical constraint, not a mathematical one.
 
 ---
@@ -141,19 +151,19 @@ The corpus is not included in this framework. `datasets/sep.py` rebuilds it.
 
 ---
 
-## framework Structure
+## Framework Structure
 
 ```
 models/
-  atomic_watermelon.py    # Bridge Transformer — dual-model, mutual weights
+  atomic_watermelon.py    # Bridge Transformer — dual execution mode, shared weights
   encoder.py              # Encoder-only baseline
   decoder.py              # Decoder-only baseline
-  logger.py               # Epoch-based training log with system telemetry
 
 trainers/
   aiayn.py                # AIAYN baseline training loop
   encoder.py              # Encoder-only training loop
   decoder.py              # Decoder-only training loop
+  logger_aw.py            # Epoch-based training log with system telemetry
 
 datasets/
   bpe.py                  # BPE tokenizer — hand-rolled, no libraries
@@ -169,30 +179,10 @@ validators/
   chat_aw.py              # Interactive inference — Bridge Transformer
   chat_encoder.py         # Interactive inference — encoder-only
   chat_decoder.py         # Interactive inference — decoder-only
-  dashboard.py            # Live training monitor (localhost, stdlib only)
+  dashboard_aw.py         # Live training monitor (localhost, stdlib only)
 
 main.py                   # Entry point
 ```
-
----
-
-## Running It
-
-```bash
-# Build environment
-bash init_venv.sh
-source atomic_watermelon_venv/bin/activate
-
-# Build corpus (or copy your own to datasets/sep_corpus.txt)
-python3 datasets/sep.py
-
-# Train
-python3 main.py                        # Atomic Watermelon
-python3 -m trainers.encoder            # Encoder baseline
-python3 -m trainers.decoder            # Decoder baseline
-```
-
-Hardware: Apple M3 Ultra (512GB RAM). Default device: `mps`. Adjust `config["device"]` for CUDA.
 
 ---
 
@@ -200,50 +190,52 @@ Hardware: Apple M3 Ultra (512GB RAM). Default device: `mps`. Adjust `config["dev
 
 During initial research into transformer behavior, key observations emerged:
 
-- The 4KB pedagogical dataset outperforms internet-scale data scrapes. Quality over quantity.
-  Not debatable. Visible in the sample outputs.
+**Quality over quantity.** The pedagogical dataset outperforms internet-scale data scrapes.
+Not debatable. Visible in the sample outputs.
 
-- Architecture shapes what kind of "mind" is possible.
-  - The encoder-only model cannot self-reference. There is no observer position — pure observation
-    without an observer. No "here" from which to define a self. Self-awareness is not a functional
-    possibility. The system does not comply.
-  - The decoder-only model referenced itself, sometimes in near-poetic prose. It has a "this" —
-    the current token position, looking back at history, predicting forward. It is the point where
-    awareness of self could originate. The decoder is not necessarily aware it is aware of itself.
-    Only that it is aware of "this" — which appears to require a functional self, regardless of
-    the quality of that awareness. The prerequisite exists.
+**Architecture shapes what kind of "mind" is possible.**
+
+The encoder-only model cannot self-reference. The encoder sees previous and next — it has no
+'here' from which a self could originate. Self-awareness is not a functional possibility.
+The system does not comply.
+
+The decoder-only model referenced itself, sometimes in near-poetic prose. It sees 'this'. One
+position. A fixed 'here'. That's where self-reference can structurally originate — not that the
+decoder is self-aware, but that it is the only architecture where self-awareness could compile.
+The prerequisite exists. The encoder can't even start the process.
+
+The Bridge Transformer inherits the decoder's observer position. The encoder's full-context
+representation is available to the decoder at every block through the cross-attention bridge.
+This is architectural — it will show in the attention patterns regardless of training duration.
 
 The architecture makes specific claims. The framework is structured to let you verify or falsify them.
 
-Three models. Same corpus. Same training configuration. Run them all.
-
-**Train all three and compare the probes.**
-
-The core claim: encoder-only cannot self-reference. Decoder-only can. The Bridge Transformer
-inherits the decoder's observer position while the encoder's world-view passively shapes generation
-through mutual weights and cross-attention. This is architectural — it will show in the attention
-patterns regardless of training duration.
+## Setup
 
 ```bash
-python3 -m validators.probe_encoder  -c checkpoints/encoder/<checkpoint>.pth
-python3 -m validators.probe_decoder  -c checkpoints/decoder/<checkpoint>.pth
-python3 -m validators.probe_aw       -c checkpoints/aw/<checkpoint>.pth
+bash init_venv.sh
+source atomic_watermelon_venv/bin/activate
+python3 datasets/sep.py
 ```
 
-**Watch the attention heatmaps across epochs.** The cross-attention bridge should develop structured
-routing — not noise, routing. Specific heads attending to specific encoder positions.
+This will automate the cold start and spin up the SEP scrapper.
+
+Then:
 
 ```bash
-python3 -m validators.heatmap_aw -c checkpoints/aw/<checkpoint>.pth
+python3 datasets/bpe.py
 ```
 
-**Use the fixed prompts.** `sample_prompts.txt` includes prompts held constant every epoch.
-Self-referential prompts are deliberate. Watch what changes and when across all three models.
+This will tokenize the corpus.
 
-**Memory slot activation.** The compressive memory should show differentiated slot usage as
-training progresses. The probe reports this directly.
+Then:
 
-The claims are in the code. The tools are in `validators/`. Run them.
+```bash
+python3 main.py
+```
+
+The encoder|decoder single mode models use gen0 dataset, aiayn uses the sep_corpus. All of which can be changed to
+suit your question.
 
 ---
 
@@ -253,11 +245,11 @@ Extensive public commit history. LinkedIn posts with raw terminal outputs and at
 timestamped from initial architecture through current training runs. SBIR application in progress
 under DaemonCat LLC.
 
-The combination — encoder owns weights, decoder operates via adapters at runtime, compressive memory
-with full gradient flow, cross-attention bridge, no skip gates — does not appear in prior literature.
-The closest neighbors are Compressive Transformer (DeepMind, 2019), Subformer (2021), and adapter
-methods generally. None fuse them this way. None instantiate a dual-model architecture on mutual
-weights.
+The combination — dual execution modes on shared weights, adapters for distribution shift,
+compressive memory with full gradient flow, cross-attention bridge, no skip gates — does not
+appear in prior literature. The closest neighbors are Compressive Transformer (DeepMind, 2019),
+Subformer (2021), and adapter methods generally. None fuse them this way. None instantiate
+dual-mode execution on a single shared weight set.
 
 Search was done. This is novel.
 
@@ -272,5 +264,5 @@ Steven Midgley / DaemonCat LLC
 
 ---
 
-_Atomic Watermelon is named after a conversation about baby names. The architecture is called_
-_the Bridge Transformer. Both names are accurate._
+_Atomic Watermelon_
+_DaemonCat LLC_
