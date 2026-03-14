@@ -3,6 +3,6 @@ atomic_watermelon_venv
 */smarthistory_corpus.txt
 */worldhistory_corpus.txt
 */tokenizer.json
-visualizations/
+visualizations/*
 */__pycache__
-checkpoints/
+checkpoints/*
