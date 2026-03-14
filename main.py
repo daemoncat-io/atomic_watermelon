@@ -1,7 +1,6 @@
 """
-Training Loop for Cross Attention Bridge Transformer
-Shared encoder weights via adapters. Cross-attention (no skip gates). Compressive memory.
-BPE tokenized input via datasets/tokenizer.json.
+Training Loop for Atomic Watermelon
+Shared encoder weights via adapters. Cross-attention. Compressive memory.
 """
 
 from torch.utils.data import DataLoader, Dataset
@@ -15,8 +14,8 @@ import mmap
 import time
 
 from models.atomic_watermelon import AtomicWatermelon
-from datasets.bpe import BPETokenizer
 from trainers.logger_aw import TrainingLog
+from datasets.bpe import BPETokenizer
 
 
 # Load tokenizer once at module level
