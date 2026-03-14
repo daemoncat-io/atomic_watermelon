@@ -156,10 +156,6 @@ Memory is an encoder concern. The decoder accesses it exclusively through the br
 185MB of curated text:
 
 - Stanford Encyclopedia of Philosophy
-- arXiv (cs.\*, selected)
-- Project Gutenberg (philosophy, history)
-- Britannica, Wikipedia (filtered)
-- MDN, Python docs
 
 BPE tokenized, vocab_size=4096. Tokenizer trained on the corpus itself — vocabulary reflects actual distribution. The corpus is not included in the repository. `datasets/sep.py` rebuilds it.
 
@@ -234,7 +230,15 @@ The encoder/decoder single-mode baselines use the gen0 dataset. The AIAYN baseli
 
 This architecture is informed by encoder-decoder transformers, compressive memory mechanisms, adapter-based parameter sharing, and shared-parameter transformer variants.
 
+<<<<<<< HEAD
 The specific combination implemented here — bidirectional encoder and causal decoder sharing backbone attention/feedforward weights, decoder-side adapters, decoder-to-encoder cross-attention over compressed persistent memory — is, to the author's knowledge, novel. That is a research claim, not a definitive literature claim.
+=======
+The combination — dual execution modes on shared weights, adapters for distribution shift,
+compressive memory with full gradient flow, cross-attention bridge, no skip gates — does not
+appear in prior literature. The closest neighbors are Compressive Transformer (DeepMind, 2019),
+Subformer (2021), and adapter methods generally.
+
+> > > > > > > refs/remotes/origin/main
 
 ---
 
