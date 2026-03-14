@@ -155,11 +155,9 @@ Memory is an encoder concern. The decoder accesses it exclusively through the br
 
 185MB of curated text:
 
-- Stanford Encyclopedia of Philosophy
-- arXiv (cs.\*, selected)
-- Project Gutenberg (philosophy, history)
-- Britannica, Wikipedia (filtered)
-- MDN, Python docs
+- https://www.worldhistory.org
+- https://plato.stanford.edu
+- https://smarthistory.org
 
 BPE tokenized, vocab_size=4096. Tokenizer trained on the corpus itself — vocabulary reflects actual distribution. The corpus is not included in the repository. `datasets/sep.py` rebuilds it.
 
