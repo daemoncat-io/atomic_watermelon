@@ -59,7 +59,7 @@ Everything else is shared.
 
 Two distinct execution paths. One weight set. Neither mode knows about the other.
 
-### The Cross-Attention Bridge
+### The Bridge
 
 After each encoder pass, the decoder queries the encoder's output through the cross-attention
 bridge. The decoder supplies the queries. The encoder's full-context representation — memory slots
