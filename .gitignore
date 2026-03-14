@@ -6,3 +6,5 @@ atomic_watermelon_venv
 visualizations/*
 */__pycache__
 checkpoints/*
+.DS_Store
+*/.DS_Store
