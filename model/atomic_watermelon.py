@@ -199,7 +199,7 @@ class BridgeBlock(nn.Module):
         return enc_x, dec_x
 
 
-class CrossAttentionBridgeTransformer(nn.Module):
+class AtomicWatermelon(nn.Module):
     """
     Transformer with compressive memory and weight-sharing via adapters.
 

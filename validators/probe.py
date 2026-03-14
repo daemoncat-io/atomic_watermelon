@@ -1,7 +1,7 @@
 """
 probe_bridge_cross_attention.py
 
-Introspect CrossAttentionBridgeTransformer models. Extract attention patterns,
+Introspect AtomicWatermelon models. Extract attention patterns,
 embedding topology, weight statistics, generation behavior. Output to CLI and JSON.
 
 No frameworks. No dependencies beyond torch and matplotlib.
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 import json
 
-from model.atomic_watermelon import CrossAttentionBridgeTransformer
+from model.atomic_watermelon import AtomicWatermelon
 from datasets.bpe import BPETokenizer
 
 matplotlib.use("Agg")
@@ -128,9 +128,7 @@ class ProbeResults:
 # ============================================================
 
 
-def load_model(
-    checkpoint_path: str, device: str
-) -> tuple[CrossAttentionBridgeTransformer, dict]:
+def load_model(checkpoint_path: str, device: str) -> tuple[AtomicWatermelon, dict]:
     """
     Load model from checkpoint. Config lives in the checkpoint.
     Returns (model, config).
@@ -138,7 +136,7 @@ def load_model(
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     cfg = checkpoint["config"]
 
-    model = CrossAttentionBridgeTransformer(
+    model = AtomicWatermelon(
         vocab_size=cfg["vocab_size"],
         d_model=cfg["d_model"],
         n_layers=cfg["n_layers"],
@@ -310,7 +308,7 @@ def print_embedding_probes(probes: list[EmbeddingProbe]):
 
 
 def extract_attention_patterns(
-    model: CrossAttentionBridgeTransformer,
+    model: AtomicWatermelon,
     input_ids: torch.Tensor,
     memory: torch.Tensor | None,
     layer_indices: list[int],
@@ -500,7 +498,7 @@ def visualize_attention(
 
 
 def test_generation(
-    model: CrossAttentionBridgeTransformer,
+    model: AtomicWatermelon,
     tokenizer: BPETokenizer,
     prompts: list[str],
     device: str,
@@ -559,7 +557,7 @@ def print_generation_samples(samples: list[GenerationSample]):
 # ============================================================
 
 
-def analyze_layers(model: CrossAttentionBridgeTransformer) -> list[LayerStats]:
+def analyze_layers(model: AtomicWatermelon) -> list[LayerStats]:
     """Extract per-layer statistics including cross-attention and adapter norms."""
     results = []
 
@@ -664,7 +662,7 @@ def print_layer_stats(stats: list[LayerStats]):
 
 
 def analyze_memory(
-    model: CrossAttentionBridgeTransformer,
+    model: AtomicWatermelon,
     tokenizer: BPETokenizer,
     device: str,
     cfg: dict,
@@ -761,7 +759,7 @@ def probe(
     max_gen_tokens: int = 144,
 ) -> ProbeResults:
     """
-    Run complete probe on a CrossAttentionBridgeTransformer.
+    Run complete probe on a AtomicWatermelon.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
@@ -915,9 +913,7 @@ def probe(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Probe CrossAttentionBridgeTransformer model"
-    )
+    parser = argparse.ArgumentParser(description="Probe AtomicWatermelon model")
     parser.add_argument(
         "--checkpoint",
         "-c",

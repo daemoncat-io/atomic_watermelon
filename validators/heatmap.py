@@ -29,7 +29,7 @@ import numpy as np
 import math
 import json
 
-from model.atomic_watermelon import CrossAttentionBridgeTransformer
+from model.atomic_watermelon import AtomicWatermelon
 
 matplotlib.use("Agg")
 
@@ -120,7 +120,7 @@ def adapter_drift(adapter: nn.Module | None) -> dict[str, float]:
 
 
 def extract_block_metrics(
-    model: CrossAttentionBridgeTransformer,
+    model: AtomicWatermelon,
 ) -> list[dict[str, float]]:
     """
     For each block, compute drift metric for every component.
@@ -169,7 +169,7 @@ def extract_block_metrics(
     return all_metrics
 
 
-def extract_global_metrics(model: CrossAttentionBridgeTransformer) -> dict[str, float]:
+def extract_global_metrics(model: AtomicWatermelon) -> dict[str, float]:
     """Extract drift metrics for non-block components."""
     m = {}
     m["tok_emb"] = model.tok_emb.weight.detach().float().std().item()
@@ -551,7 +551,7 @@ def main(
     checkpoint = torch.load(checkpoint_path, map_location=DEVICE, weights_only=False)
     cfg = checkpoint["config"]
 
-    model = CrossAttentionBridgeTransformer(
+    model = AtomicWatermelon(
         vocab_size=cfg["vocab_size"],
         d_model=cfg["d_model"],
         n_layers=cfg["n_layers"],

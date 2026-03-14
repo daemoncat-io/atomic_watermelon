@@ -20,7 +20,7 @@ Usage:
     text = tokenizer.decode(ids)
 
 Integration with bridge transformer:
-    model = CrossAttentionBridgeTransformer(vocab_size=tokenizer.vocab_size)
+    model = AtomicWatermelon(vocab_size=tokenizer.vocab_size)
 """
 
 from typing import IO, Iterator

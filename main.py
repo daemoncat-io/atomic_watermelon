@@ -14,7 +14,7 @@ import torch
 import mmap
 import time
 
-from model.atomic_watermelon import CrossAttentionBridgeTransformer
+from model.atomic_watermelon import AtomicWatermelon
 from model.logger import TrainingLog
 from datasets.bpe import BPETokenizer
 
@@ -162,7 +162,7 @@ def train():
     val_loader = DataLoader(val_set, batch_size=config["batch_size"])
     test_loader = DataLoader(test_set, batch_size=config["batch_size"])
 
-    model = CrossAttentionBridgeTransformer(
+    model = AtomicWatermelon(
         vocab_size=config["vocab_size"],
         d_model=config["d_model"],
         n_layers=config["n_layers"],
