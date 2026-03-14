@@ -14,7 +14,9 @@ import torch.nn.functional as F
 from typing import Any
 from tqdm import tqdm
 import torch.nn as nn
+import numpy as np
 import hashlib
+import random
 import torch
 import time
 
@@ -442,11 +444,17 @@ def train():
                 {
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_step": scheduler.step_num,
                     "epoch": epoch,
                     "best_loss": best_loss,
                     "patience_counter": patience_counter,
                     "config": config,
                     "dataset_hash": dataset.hash,
+                    "rng_states": {
+                        "torch": torch.get_rng_state(),
+                        "numpy": np.random.get_state(),
+                        "python": random.getstate(),
+                    },
                 },
                 log.checkpoint_path,
             )

@@ -38,7 +38,7 @@ config: dict[str, Any] = {
     "vocab_size": tokenizer.vocab_size,
     "context_length": 4096,
     # Model
-    "model": "cross_attention",
+    "model": "atomic_watermelon",
     "adapter_bottleneck": 128,
     "compress_chunk": 128,
     "memory_slots": 32,
@@ -57,7 +57,7 @@ config: dict[str, Any] = {
     "patience": 25,
     "epochs": 500,
     # Memory handling
-    "detach_memory_grad": True,  # False = compress expectation + delta into memory
+    "detach_memory_grad": True,  # False => context = compress expectation + delta from current
     "memory_shards": 1,
 }
 

@@ -3,13 +3,21 @@
 		"AIAYN",
 		"apitalization",
 		"autoencoding",
+		"axvline",
+		"Consolas",
+		"fontfamily",
+		"fontweight",
 		"gridspec",
+		"hspace",
 		"inished",
+		"labelsize",
 		"lrate",
 		"mcolors",
 		"multinomial",
 		"segs",
 		"triu",
+		"vmax",
+		"vmin",
 		"yticklabels"
 	]
 }

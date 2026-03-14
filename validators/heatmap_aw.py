@@ -13,7 +13,7 @@ Metric: "drift from initialization"
 
 Usage:
     python heatmap_bridge.py
-    python heatmap_bridge.py -c checkpoints/cross_attention_20260225_164548_best.pth
+    python heatmap_bridge.py -c checkpoints/atomic_watermelon_20260225_164548_best.pth
     python heatmap_bridge.py -c checkpoints/my_run_best.pth -o my_heatmap.png
 """
 
@@ -38,7 +38,7 @@ matplotlib.use("Agg")
 # ============================================================
 
 DEVICE = "cpu"  # CPU is fine for weight inspection
-CHECKPOINT_PATH = "cross_attention_20260225_164548_best.pth"
+CHECKPOINT_PATH = "atomic_watermelon_20260225_164548_best.pth"
 TOKENIZER_PATH = "datasets/tokenizer.json"
 OUTPUT_PATH = "visualizations/heatmap_bridge.png"
 

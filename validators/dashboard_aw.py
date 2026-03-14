@@ -6,8 +6,8 @@ a self-updating HTML page on localhost.
 
 Usage:
     python live_monitor.py                                          # auto-find latest log
-    python live_monitor.py checkpoints/cross_attention_*.json       # specific log
-    python live_monitor.py checkpoints/cross_attention_*.json 8080  # custom port
+    python live_monitor.py checkpoints/*.json       # specific log
+    python live_monitor.py checkpoints/*.json 8080  # custom port
 
 Opens in browser. Polls every 30s. No dependencies beyond stdlib.
 """

@@ -1,5 +1,5 @@
 """
-probe_bridge_cross_attention.py
+probe_bridge_atomic_watermelon.py
 
 Introspect AtomicWatermelon models. Extract attention patterns,
 embedding topology, weight statistics, generation behavior. Output to CLI and JSON.
