@@ -1,5 +1,7 @@
 atomic_watermelon_venv
 */sep_corpus.txt
+*/smarthistory_corpus.txt
+*/worldhistory_corpus.txt
 */tokenizer.json
 visualizations/
 */__pycache__

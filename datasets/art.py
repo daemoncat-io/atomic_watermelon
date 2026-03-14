@@ -4,7 +4,7 @@ import urllib.error
 import time
 
 # ── Config ────────────────────────────────────────────────────────────────────
-OUTPUT_FILE = "smarthistory_corpus.txt"
+OUTPUT_FILE = "datasets/smarthistory_corpus.txt"
 BASE_URL = "https://smarthistory.org"
 TOC_URL = "https://smarthistory.org/smarthistory-table-of-contents/"
 REQUEST_DELAY = 2.0

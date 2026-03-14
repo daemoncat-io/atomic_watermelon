@@ -4,7 +4,7 @@ import urllib.error
 import time
 
 # ── Config ────────────────────────────────────────────────────────────────────
-OUTPUT_FILE = "worldhistory_corpus.txt"
+OUTPUT_FILE = "datasets/worldhistory_corpus.txt"
 BASE_URL = "https://www.worldhistory.org"
 INDEX_URL = "https://www.worldhistory.org/article/"
 REQUEST_DELAY = 2.0
