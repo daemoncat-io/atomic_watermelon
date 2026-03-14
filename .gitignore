@@ -1,5 +1,6 @@
 atomic_watermelon_venv
 */sep_corpus.txt
 */tokenizer.json
+visualizations/
 */__pycache__
 checkpoints/
