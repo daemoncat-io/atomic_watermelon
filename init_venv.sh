@@ -2,7 +2,7 @@
 
 set -e  # Exit on error
 
-VENV_DIR="research_transformer_venv" 
+VENV_DIR="atomic_watermelon_venv" 
 
 # --- Remove old venv if it exists ---
 if [ -d "$VENV_DIR" ]; then
@@ -17,7 +17,7 @@ python3 -m venv "$VENV_DIR"
 
 # --- Activate venv ---
 echo "🚀 Activating virtual environment..."
-source research_transformer_venv/bin/activate
+source atomic_watermelon_venv/bin/activate
 
 # --- Check for requirements.txt ---
 if [ ! -f requirements.txt ]; then
