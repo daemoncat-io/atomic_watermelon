@@ -1,0 +1,7 @@
+matplotlib
+typing
+psutil
+torch
+numpy
+nltk
+tqdm
