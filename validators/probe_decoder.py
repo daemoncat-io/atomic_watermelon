@@ -1,5 +1,5 @@
 """
-Probe your Transformer.
+Probe your Decoder.
 
 Inspect attention patterns, embedding space, weight statistics.
 Understand what the model actually learned.
@@ -10,8 +10,7 @@ import torch.nn.functional as F
 import matplotlib
 import torch
 
-
-from models.aiayn import Transformer
+from models.decoder import Decoder
 
 matplotlib.use("Agg")
 
@@ -31,15 +30,15 @@ class ASCIITokenizer:
         return "".join(chr(t) for t in tokens)
 
 
-def load_model(path: str) -> Transformer:
+def load_model(path: str) -> Decoder:
     """Load trained model."""
     checkpoint = torch.load(path, map_location=device)
-    model = Transformer()
+    model = Decoder()
     model.load_state_dict(checkpoint)
     return model.to(device)
 
 
-def inspect_weights(model: Transformer):
+def inspect_weights(model: Decoder):
     """Print weight statistics for all layers."""
     print("\n" + "=" * 60)
     print("WEIGHT INSPECTION")
@@ -53,7 +52,6 @@ def inspect_weights(model: Transformer):
         print(f"  Min:  {param.min().item():.6f}")
         print(f"  Max:  {param.max().item():.6f}")
 
-        # Check for dead weights
         zero_count = (param.abs() < 1e-6).sum().item()
         total = param.numel()
         if zero_count > 0:
@@ -61,7 +59,7 @@ def inspect_weights(model: Transformer):
 
 
 def extract_attention(
-    model: Transformer, input_ids: torch.Tensor, layer_idx: int = 0
+    model: Decoder, input_ids: torch.Tensor, layer_idx: int = 0
 ) -> torch.Tensor:
     """Extract attention weights from a specific layer."""
     model.eval()
@@ -82,6 +80,7 @@ def extract_attention(
                 )
                 q, k, v = qkv[0], qkv[1], qkv[2]
 
+                # Causal mask
                 attn = (q @ k.transpose(-2, -1)) / (model.head_dim**0.5)
                 attn = attn.masked_fill(model.mask[:T, :T] == 0, float("-inf"))
                 attn = F.softmax(attn, dim=-1)
@@ -112,7 +111,7 @@ def visualize_attention(
     attention: torch.Tensor, tokens: str, save_path: str = "attention.png"
 ):
     """Save attention heatmaps for all heads."""
-    attn = attention[0].cpu().numpy()  # First batch
+    attn = attention[0].cpu().numpy()
     num_heads = attn.shape[0]
 
     fig, axes = plt.subplots(2, num_heads // 2, figsize=(16, 8))
@@ -137,7 +136,7 @@ def visualize_attention(
     print(f"Saved: {save_path}")
 
 
-def probe_embeddings(model: Transformer, tokenizer: ASCIITokenizer, chars: list[str]):
+def probe_embeddings(model: Decoder, tokenizer: ASCIITokenizer, chars: list[str]):
     """Find nearest neighbors in embedding space."""
     print("\n" + "=" * 60)
     print("EMBEDDING SPACE")
@@ -158,8 +157,8 @@ def probe_embeddings(model: Transformer, tokenizer: ASCIITokenizer, chars: list[
             print(f"  {neighbor:10} sim: {val.item():.4f}")
 
 
-def test_generation(model: Transformer, tokenizer: ASCIITokenizer, prompts: list[str]):
-    """Test model with various prompts."""
+def test_generation(model: Decoder, tokenizer: ASCIITokenizer, prompts: list[str]):
+    """Test decoder generation — the defining decoder capability."""
     print("\n" + "=" * 60)
     print("GENERATION TEST")
     print("=" * 60)
@@ -173,7 +172,7 @@ def test_generation(model: Transformer, tokenizer: ASCIITokenizer, prompts: list
         print(f"Output: {text}")
 
 
-def analyze_layers(model: Transformer):
+def analyze_layers(model: Decoder):
     """Check LayerNorm statistics across layers."""
     print("\n" + "=" * 60)
     print("LAYER ANALYSIS")
@@ -188,23 +187,16 @@ def analyze_layers(model: Transformer):
 if __name__ == "__main__":
     print(f"Device: {device}")
 
-    # Load model
     tokenizer = ASCIITokenizer()
 
     print(f"Loading: {checkpoint_path}")
     model = load_model(checkpoint_path)
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # Inspect weights
     inspect_weights(model)
-
-    # Layer analysis
     analyze_layers(model)
-
-    # Embedding space
     probe_embeddings(model, tokenizer, ["a", "A", " ", ".", "?", "!", "e", "E"])
 
-    # Attention patterns
     test_text = "The dog ran."
     input_ids = torch.tensor([[ord(c) for c in test_text]]).to(device)
 
@@ -213,15 +205,17 @@ if __name__ == "__main__":
         if attn is not None:
             visualize_attention(attn, test_text, f"attention_layer{layer_idx}.png")
 
-    # Generation tests
-    test_prompts = [
-        "The Transformer",
-        "Words are",
-        "I am",
-        "Questions can",
-        "The dog",
-        "Space is",
-    ]
-    test_generation(model, tokenizer, test_prompts)
+    test_generation(
+        model,
+        tokenizer,
+        [
+            "To decode means to? ",
+            "How are you feeling? ",
+            "What is your purpose? ",
+            "sup. ",
+            "I am",
+            "The dog",
+        ],
+    )
 
     print("\n✅ Probing complete")
