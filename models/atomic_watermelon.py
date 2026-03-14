@@ -256,7 +256,6 @@ class AtomicWatermelon(nn.Module):
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
         self.lm_head.weight = self.tok_emb.weight
 
-        # FIX 2: buffer is named attention_mask — must match every reference below
         self.register_buffer(
             "attention_mask",
             torch.tril(torch.ones(max_seq_len, max_seq_len)).unsqueeze(0).unsqueeze(0),
@@ -347,7 +346,7 @@ class AtomicWatermelon(nn.Module):
             loss:       scalar or None
             new_memory: [B, M', C] updated memory
         """
-        # FIX 1: unpack shape so T is a plain int, not torch.Size
+
         B, T = x.shape
         device = x.device
 
@@ -370,7 +369,6 @@ class AtomicWatermelon(nn.Module):
         # Decoder input: current segment only
         dec_x = x_emb  # [B, T, C]
 
-        # FIX 2: self.attention_mask, not self.causal_mask
         # Decoder causal mask: [1, 1, T, T]
         dec_causal_mask = self.attention_mask[:, :, :T, :T]
 
@@ -381,12 +379,11 @@ class AtomicWatermelon(nn.Module):
         cross_mask = torch.ones(1, 1, T, enc_len, device=device)
 
         if n_memory > 0:
-            current_causal = self.attention_mask[:, :, :T, :T]  # FIX 2 here too
+            current_causal = self.attention_mask[:, :, :T, :T]
             cross_mask[:, :, :, n_memory:] = current_causal
         else:
             cross_mask = dec_causal_mask
 
-        # FIX 3: pass cross_mask to BridgeBlock
         for block in self.blocks:
             enc_x, dec_x = block(enc_x, dec_x, dec_causal_mask, cross_mask)
 
