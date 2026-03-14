@@ -15,8 +15,8 @@ import mmap
 import time
 
 from model.atomic_watermelon import AtomicWatermelon
-from model.logger import TrainingLog
 from datasets.bpe import BPETokenizer
+from model.logger import TrainingLog
 
 
 # Load tokenizer once at module level
