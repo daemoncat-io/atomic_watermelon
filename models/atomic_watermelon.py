@@ -434,8 +434,6 @@ class AtomicWatermelon(nn.Module):
             memory: updated memory state
         """
         self.eval()
-        B = x.shape[0]
-        device = x.device
         generated = x.clone()
 
         # Process prompt in compress_chunk sized pieces to build memory
