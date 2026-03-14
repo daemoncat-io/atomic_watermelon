@@ -12,7 +12,6 @@ OUTPUT_FILE = "datasets/worldhistory_corpus.txt"
 BASE_URL = "https://www.worldhistory.org"
 MAX_DOC_CHARS = 200_000
 MIN_DOC_CHARS = 2_000
-# WHE paginates the article index — scrape up to this many pages
 MAX_INDEX_PAGES = 100
 REQUEST_TIMEOUT = 30
 REQUEST_DELAY = 2.0
