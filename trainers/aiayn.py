@@ -1,10 +1,10 @@
 """
 Trainer for Encoder-Decoder Transformer (AIAYN)
-Aligned with existing decoder trainer patterns
+Aligned with AW trainer patterns.
 
-Training specifications from paper:
+Training specifications from Attention Is All You Need:
 - Optimizer: Adam with β1=0.9, β2=0.98, ε=10^-9
-- Learning rate schedule: lrate = d_model^-0.5 * min(step_num^-0.5, step_num * warmup_steps^-1.5)
+- LR schedule: d_model^-0.5 * min(step^-0.5, step * warmup^-1.5)
 - Warmup steps: 4000
 - Label smoothing: ε_ls = 0.1
 """
@@ -22,49 +22,42 @@ from models.logger import TrainingLog
 from models.aiayn import Transformer
 
 
-# =============================================================================
-# Config
-# =============================================================================
-
 config: dict[str, Any] = {
     # Data
-    "dataset": "wordnet.txt",
-    "dataset_repeat": 1,
+    "dataset": "datasets/gen0_language_structure.txt",
     "context_length": 512,
+    "dataset_repeat": 500,
     # Model
+    "share_embeddings": True,
     "model": "aiayn",
     "d_model": 512,
+    "dropout": 0.1,
     "n_layers": 6,
     "n_heads": 8,
     "d_ff": 2048,
-    "dropout": 0.1,
-    "share_embeddings": True,
     # Training
-    "batch_size": 16,
-    "epochs": 110,
-    "patience": 10,
-    "device": "mps",
-    # Optimizer (paper Section 5.3)
-    "learning_rate": 1.0,  # Scaled by schedule
-    "beta1": 0.9,
-    "beta2": 0.98,
-    "epsilon": 1e-9,
-    "warmup_steps": 4000,
-    # Label smoothing (paper Section 5.4)
+    "device": "mps" if torch.backends.mps.is_available() else "cpu",
     "label_smoothing": 0.1,
-    # Gradient clipping
     "max_grad_norm": 1.0,
+    "learning_rate": 1.0,  # Scaled by schedule
+    "warmup_steps": 4000,
+    "batch_size": 1,
+    "epsilon": 1e-9,
+    "patience": 10,
+    "epochs": 110,
+    "beta2": 0.98,
+    "beta1": 0.9,
 }
 
 
 # =============================================================================
-# Learning Rate Schedule (Paper Section 5.3)
+# LR Schedule (paper Section 5.3)
 # =============================================================================
 
 
 class TransformerLRScheduler:
     """
-    lrate = d_model^(-0.5) * min(step_num^(-0.5), step_num * warmup_steps^(-1.5))
+    lrate = d_model^(-0.5) * min(step^(-0.5), step * warmup_steps^(-1.5))
 
     Linear warmup for warmup_steps, then inverse sqrt decay.
     """
@@ -102,14 +95,14 @@ class TransformerLRScheduler:
 
 
 # =============================================================================
-# Label Smoothing Loss (Paper Section 5.4)
+# Label Smoothing Loss (paper Section 5.4)
 # =============================================================================
 
 
 class LabelSmoothingLoss(nn.Module):
     """
     Soft targets: true class gets (1 - ε), others share ε uniformly.
-    Hurts perplexity, improves BLEU/generalization.
+    Hurts perplexity, improves generalization.
     """
 
     def __init__(self, vocab_size: int, smoothing: float = 0.1, pad_idx: int = 0):
@@ -126,7 +119,6 @@ class LabelSmoothingLoss(nn.Module):
             target = target.contiguous().view(-1)
 
         log_probs = F.log_softmax(logits, dim=-1)
-
         smooth_loss = -log_probs.sum(dim=-1)
         nll_loss = -log_probs.gather(dim=-1, index=target.unsqueeze(-1)).squeeze(-1)
 
@@ -142,31 +134,22 @@ class LabelSmoothingLoss(nn.Module):
 
 
 # =============================================================================
-# Dataset - ASCII-based seq2seq (autoencoding for now)
+# Dataset
 # =============================================================================
 
 
 class ASCIISeq2SeqDataset(Dataset):
     """
-    For encoder-decoder: source -> target pairs.
-    For autoencoding/denoising: source = target (or noised source -> target).
-
-    Using ASCII tokenization to match your existing setup.
+    ASCII autoencoding dataset. Source and target are identical.
+    BOS/EOS tokens prepended/appended for encoder-decoder training.
     """
 
-    def __init__(
-        self,
-        text: str,
-        context_length: int,
-        noise_prob: float = 0.0,  # Set > 0 for denoising autoencoder
-    ):
+    def __init__(self, text: str, context_length: int):
         self.tokens = [ord(c) for c in text]
         self.context_length = context_length
-        self.noise_prob = noise_prob
         self.hash = hashlib.sha256(text.encode()).hexdigest()[:16]
-        self.vocab_size = 256  # ASCII
+        self.vocab_size = 256
 
-        # Special tokens
         self.pad_idx = 0
         self.bos_idx = 1
         self.eos_idx = 2
@@ -176,47 +159,25 @@ class ASCIISeq2SeqDataset(Dataset):
 
     def __getitem__(self, idx):
         start = idx * self.context_length
-        end = start + self.context_length
+        chunk = self.tokens[start : start + self.context_length]
 
-        # Get chunk
-        chunk = self.tokens[start:end]
-
-        # Source and target (for autoencoding, they're the same)
-        src = chunk.copy()
-        tgt = chunk.copy()
-
-        # Optional: add noise to source for denoising objective
-        if self.noise_prob > 0:
-            src = self._add_noise(src)
-
-        # Add BOS/EOS
-        src = [self.bos_idx] + src + [self.eos_idx]
-        tgt = [self.bos_idx] + tgt + [self.eos_idx]
+        src = [self.bos_idx] + chunk + [self.eos_idx]
+        tgt = [self.bos_idx] + chunk + [self.eos_idx]
 
         return {
             "src": torch.tensor(src, dtype=torch.long),
             "tgt": torch.tensor(tgt, dtype=torch.long),
         }
 
-    def _add_noise(self, tokens: list[int]) -> list[int]:
-        """Simple noise: randomly drop tokens."""
-        import random
-
-        return [t for t in tokens if random.random() > self.noise_prob]
-
 
 def collate_seq2seq(batch: list[dict], pad_idx: int = 0) -> dict:
     """Collate with dynamic padding."""
-    src_list = [item["src"] for item in batch]
-    tgt_list = [item["tgt"] for item in batch]
-
     src_padded = nn.utils.rnn.pad_sequence(
-        src_list, batch_first=True, padding_value=pad_idx
+        [item["src"] for item in batch], batch_first=True, padding_value=pad_idx
     )
     tgt_padded = nn.utils.rnn.pad_sequence(
-        tgt_list, batch_first=True, padding_value=pad_idx
+        [item["tgt"] for item in batch], batch_first=True, padding_value=pad_idx
     )
-
     return {"src": src_padded, "tgt": tgt_padded}
 
 
@@ -226,7 +187,6 @@ def collate_seq2seq(batch: list[dict], pad_idx: int = 0) -> dict:
 
 
 def get_grad_norm(model: nn.Module) -> float:
-    """Calculate total gradient norm across all parameters."""
     total_norm = 0.0
     for p in model.parameters():
         if p.grad is not None:
@@ -240,7 +200,7 @@ def create_masks(
     pad_idx: int,
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Create source padding mask and target causal+padding mask."""
+    """Source padding mask and target causal+padding mask."""
     src_mask = (src != pad_idx).unsqueeze(1).unsqueeze(2).to(device)
 
     tgt_len = tgt.size(1)
@@ -248,8 +208,7 @@ def create_masks(
     tgt_causal_mask = (
         torch.triu(torch.ones(tgt_len, tgt_len, device=device), diagonal=1) == 0
     )
-    tgt_causal_mask = tgt_causal_mask.unsqueeze(0).unsqueeze(0)
-    tgt_mask = tgt_pad_mask & tgt_causal_mask
+    tgt_mask = tgt_pad_mask & tgt_causal_mask.unsqueeze(0).unsqueeze(0)
 
     return src_mask, tgt_mask
 
@@ -263,7 +222,7 @@ def greedy_decode(
     eos_idx: int = 2,
     pad_idx: int = 0,
 ) -> torch.Tensor:
-    """Greedy decoding for inference."""
+    """Greedy decoding for sampling."""
     model.eval()
     device = next(model.parameters()).device
     src = src.to(device)
@@ -276,14 +235,15 @@ def greedy_decode(
     for _ in range(max_len):
         tgt_len = generated.size(1)
         tgt_mask = (
-            torch.triu(torch.ones(tgt_len, tgt_len, device=device), diagonal=1) == 0
+            (torch.triu(torch.ones(tgt_len, tgt_len, device=device), diagonal=1) == 0)
+            .unsqueeze(0)
+            .unsqueeze(0)
         )
-        tgt_mask = tgt_mask.unsqueeze(0).unsqueeze(0)
 
         decoder_output = model.decode(generated, encoder_output, src_mask, tgt_mask)
-        logits = model.output_projection(decoder_output)
-
-        next_token = logits[:, -1, :].argmax(dim=-1, keepdim=True)
+        next_token = model.output_projection(decoder_output)[:, -1, :].argmax(
+            dim=-1, keepdim=True
+        )
         generated = torch.cat([generated, next_token], dim=1)
 
         if next_token.item() == eos_idx:
@@ -302,28 +262,21 @@ def train():
     device = torch.device(config["device"])
     print(f"Device: {device}")
 
-    # Data
-    text = open(f"training_data/{config['dataset']}").read() * config["dataset_repeat"]
+    text = open(config["dataset"]).read() * config["dataset_repeat"]
     dataset = ASCIISeq2SeqDataset(text, config["context_length"])
 
     train_size = int(0.9 * len(dataset))
     val_size = len(dataset) - train_size
     train_set, val_set = torch.utils.data.random_split(dataset, [train_size, val_size])
 
+    collate = lambda b: collate_seq2seq(b, pad_idx=dataset.pad_idx)
     train_loader = DataLoader(
-        train_set,
-        batch_size=config["batch_size"],
-        shuffle=True,
-        collate_fn=lambda b: collate_seq2seq(b, pad_idx=dataset.pad_idx),
+        train_set, batch_size=config["batch_size"], shuffle=True, collate_fn=collate
     )
     val_loader = DataLoader(
-        val_set,
-        batch_size=config["batch_size"],
-        shuffle=False,
-        collate_fn=lambda b: collate_seq2seq(b, pad_idx=dataset.pad_idx),
+        val_set, batch_size=config["batch_size"], collate_fn=collate
     )
 
-    # Model
     model = Transformer(
         src_vocab_size=dataset.vocab_size,
         tgt_vocab_size=dataset.vocab_size,
@@ -331,12 +284,11 @@ def train():
         n_layers=config["n_layers"],
         h=config["n_heads"],
         d_ff=config["d_ff"],
-        max_seq_len=config["context_length"] + 10,  # Room for BOS/EOS
+        max_seq_len=config["context_length"] + 10,
         dropout=config["dropout"],
         share_embeddings=config["share_embeddings"],
     ).to(device)
 
-    # Optimizer
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=config["learning_rate"],
@@ -344,7 +296,6 @@ def train():
         eps=config["epsilon"],
     )
 
-    # LR Scheduler
     scheduler = TransformerLRScheduler(
         optimizer,
         d_model=config["d_model"],
@@ -352,14 +303,12 @@ def train():
         scale=config["learning_rate"],
     )
 
-    # Loss
     criterion = LabelSmoothingLoss(
         vocab_size=dataset.vocab_size,
         smoothing=config["label_smoothing"],
         pad_idx=dataset.pad_idx,
     )
 
-    # Logging
     log = TrainingLog(config, model)
     log.set_data_info(dataset, train_size, val_size, train_loader, val_loader)
 
@@ -370,15 +319,12 @@ def train():
     print(f"Val batches: {len(val_loader)}")
     print(f"Parameters: {log.data['model_architecture']['param_count']:,}")
 
-    # Training loop
     best_loss = float("inf")
     patience_counter = 0
-    global_step = 0
 
     for epoch in range(config["epochs"]):
         epoch_start = time.time()
 
-        # Train
         model.train()
         train_loss = 0.0
         train_tokens = 0
@@ -388,22 +334,17 @@ def train():
             src = batch["src"].to(device)
             tgt = batch["tgt"].to(device)
 
-            # Teacher forcing: input is tgt[:-1], labels are tgt[1:]
             tgt_input = tgt[:, :-1]
             tgt_labels = tgt[:, 1:]
 
-            # Masks
             src_mask, tgt_mask = create_masks(src, tgt_input, dataset.pad_idx, device)
 
-            # Forward
             logits = model(src, tgt_input, src_mask, tgt_mask)
             loss = criterion(logits, tgt_labels)
 
-            # Backward
             loss.backward()
             last_grad_norm = get_grad_norm(model)
 
-            # Gradient clipping
             if config["max_grad_norm"] > 0:
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), config["max_grad_norm"]
@@ -412,14 +353,11 @@ def train():
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
-            global_step += 1
 
-            # Track loss
             n_tokens = (tgt_labels != dataset.pad_idx).sum().item()
             train_loss += loss.item() * n_tokens
             train_tokens += n_tokens
 
-        # Validate
         model.eval()
         val_loss = 0.0
         val_tokens = 0
@@ -443,7 +381,6 @@ def train():
                 val_loss += loss.item() * n_tokens
                 val_tokens += n_tokens
 
-        # Compute averages
         train_loss /= max(1, train_tokens)
         val_loss /= max(1, val_tokens)
         epoch_time = time.time() - epoch_start
@@ -456,25 +393,22 @@ def train():
 
         is_best = val_loss < best_loss
 
-        # Sample every 5 epochs
         samples = None
         if (epoch + 1) % 5 == 0:
             prompts = {
-                "punctuation": "PUNCTUATION\n\nThis is a statement.",
-                "code": "import { Component }",
-                "self_ref": "I am",
+                "To decode means to?": "To decode means to? ",
+                "How are you feeling?": "How are you feeling? ",
+                "What is your purpose?": "What is your purpose? ",
+                "sup.": "sup. ",
             }
             samples = {}
             for name, prompt_text in prompts.items():
-                # Encode prompt as source
                 src_tokens = (
                     [dataset.bos_idx]
                     + [ord(c) for c in prompt_text]
                     + [dataset.eos_idx]
                 )
                 src_tensor = torch.tensor([src_tokens], dtype=torch.long).to(device)
-
-                # Decode
                 out = greedy_decode(
                     model,
                     src_tensor,
@@ -483,17 +417,14 @@ def train():
                     eos_idx=dataset.eos_idx,
                     pad_idx=dataset.pad_idx,
                 )
-
-                # Convert to text (skip BOS)
                 decoded = "".join(
                     chr(t)
                     for t in out[0, 1:].tolist()
-                    if 32 <= t < 127 or t in (10, 13, 9)  # Printable + whitespace
+                    if 32 <= t < 127 or t in (10, 13, 9)
                 )
                 samples[name] = decoded
-                print(f"Sample ({name}): {decoded[:100]}...")
+                print(f"Sample ({name}): {decoded[:200]}...[END]")
 
-        # Log
         log.log_epoch(
             epoch=epoch,
             train_loss=train_loss,
@@ -505,10 +436,20 @@ def train():
             sample=samples,
         )
 
-        # Checkpointing
         if is_best:
             best_loss = val_loss
-            torch.save(model.state_dict(), log.checkpoint_path)
+            torch.save(
+                {
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "epoch": epoch,
+                    "best_loss": best_loss,
+                    "patience_counter": patience_counter,
+                    "config": config,
+                    "dataset_hash": dataset.hash,
+                },
+                log.checkpoint_path,
+            )
             patience_counter = 0
         else:
             patience_counter += 1
