@@ -28,9 +28,9 @@ matplotlib.use("Agg")
 # ============================================================
 
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
-CHECKPOINT_PATH = ""
-OUTPUT_DIR = Path("probe_results")
 TOKENIZER_PATH = "datasets/tokenizer.json"
+OUTPUT_DIR = Path("probe_results")
+CHECKPOINT_PATH = ""
 
 
 # ============================================================
