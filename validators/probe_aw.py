@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 import json
 
-from model.atomic_watermelon import AtomicWatermelon
+from models.atomic_watermelon import AtomicWatermelon
 from datasets.bpe import BPETokenizer
 
 matplotlib.use("Agg")
@@ -27,8 +27,8 @@ matplotlib.use("Agg")
 # CONFIGURATION
 # ============================================================
 
-DEVICE = "mps"
-CHECKPOINT_PATH = "cross_attention_20260225_164548_best.pth"
+DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
+CHECKPOINT_PATH = ""
 OUTPUT_DIR = Path("probe_results")
 TOKENIZER_PATH = "datasets/tokenizer.json"
 

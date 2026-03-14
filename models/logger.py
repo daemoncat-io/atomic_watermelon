@@ -1,5 +1,5 @@
 """
-Training Logger - Epoch-based logging with comprehensive system telemetry
+Training Logger for Atomic Watermelon
 """
 
 from torch.utils.data import DataLoader

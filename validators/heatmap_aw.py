@@ -29,7 +29,7 @@ import numpy as np
 import math
 import json
 
-from model.atomic_watermelon import AtomicWatermelon
+from models.atomic_watermelon import AtomicWatermelon
 
 matplotlib.use("Agg")
 

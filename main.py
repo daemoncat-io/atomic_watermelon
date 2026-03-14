@@ -14,9 +14,9 @@ import torch
 import mmap
 import time
 
-from model.atomic_watermelon import AtomicWatermelon
+from models.atomic_watermelon import AtomicWatermelon
 from datasets.bpe import BPETokenizer
-from model.logger import TrainingLog
+from models.logger import TrainingLog
 
 
 # Load tokenizer once at module level
@@ -48,16 +48,16 @@ config: dict[str, Any] = {
     "n_heads": 4,
     "d_ff": 2048,
     # Training
+    "device": "mps" if torch.backends.mps.is_available() else "cpu",
     "learning_rate": 3e-4,
     "mx_divergence": 1.5,
     "max_grad_norm": 1.0,
     "weight_decay": 0.01,
     "batch_size": 1,
-    "device": "mps",
     "patience": 25,
     "epochs": 500,
     # Memory handling
-    "detach_memory_grad": False,
+    "detach_memory_grad": True,  # False = compress expectation + delta into memory
     "memory_shards": 1,
 }
 

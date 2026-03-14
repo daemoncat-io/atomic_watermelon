@@ -1,7 +1,7 @@
 """
 Atomic Watermelon
 
-Cross Attention Skip-Gate Bridge Transformer with Compressive Memory
+A dual mode mutual weight focused attention transformer with memory compression
 
 Encoder: bidirectional, maintains compressed memory across calls
 Decoder: borrows encoder weights, causal mask, pulls from memory
@@ -487,101 +487,3 @@ class AtomicWatermelon(nn.Module):
                     buffer = next_tok
 
         return generated, memory
-
-
-if __name__ == "__main__":
-    print("Bridge Transformer with Compressive Memory + Adapters")
-    print("=" * 55)
-
-    model = BridgedTransformer(
-        vocab_size=256,
-        d_model=512,
-        n_layers=6,
-        n_heads=4,
-        d_ff=2048,
-        memory_slots=32,
-        compress_chunk=64,
-        adapter_bottleneck=64,
-    )
-
-    # Count params by category
-    total = sum(p.numel() for p in model.parameters())
-
-    enc_params = 0  # Encoder-owned (shared) weights
-    adapter_params = 0  # Decoder adapters
-    cross_params = 0  # Cross-attention (decoder-private)
-    compress_params = 0  # Compression network
-    other_params = 0  # Embeddings, output head, etc.
-
-    for name, p in model.named_parameters():
-        if "enc_" in name:
-            enc_params += p.numel()
-        elif "adapt" in name:
-            adapter_params += p.numel()
-        elif "cross" in name:
-            cross_params += p.numel()
-        elif "compress" in name:
-            compress_params += p.numel()
-        else:
-            other_params += p.numel()
-
-    decoder_private = adapter_params + cross_params
-
-    print(f"\nParameter counts:")
-    print(f"  Total:              {total:,}")
-    print(f"  ─────────────────────────────")
-    print(f"  Encoder (shared):   {enc_params:,} ({100*enc_params/total:.1f}%)")
-    print(f"  Decoder adapters:   {adapter_params:,} ({100*adapter_params/total:.1f}%)")
-    print(f"  Cross-attention:    {cross_params:,} ({100*cross_params/total:.1f}%)")
-    print(
-        f"  Compression:        {compress_params:,} ({100*compress_params/total:.1f}%)"
-    )
-    print(f"  Other (emb, etc):   {other_params:,} ({100*other_params/total:.1f}%)")
-    print(f"  ─────────────────────────────")
-    print(
-        f"  Decoder-private:    {decoder_private:,} ({100*decoder_private/total:.1f}%)"
-    )
-    print(f"  Shared/borrowed:    {enc_params:,} ({100*enc_params/total:.1f}%)")
-
-    # Test forward pass without memory
-    print(f"\n--- Test: Forward pass (no memory) ---")
-    x = torch.randint(0, 256, (2, 128))
-    logits, loss, memory = model(x, targets=x)
-    print(f"  Input:   {x.shape}")
-    print(f"  Output:  {logits.shape}")
-    print(f"  Memory:  {memory.shape if memory is not None else None}")
-
-    # Test forward pass with memory
-    print(f"\n--- Test: Forward pass (with memory) ---")
-    x2 = torch.randint(0, 256, (2, 128))
-    logits2, loss2, memory2 = model(x2, targets=x2, memory=memory)
-    print(f"  Input:   {x2.shape}")
-    print(f"  Output:  {logits2.shape}")
-    print(f"  Memory:  {memory2.shape if memory2 is not None else None}")
-
-    # Test generation
-    print(f"\n--- Test: Generation ---")
-    prompt = torch.randint(0, 256, (1, 10))
-    generated, final_memory = model.generate(prompt, max_tokens=50)
-    print(f"  Prompt:    {prompt.shape}")
-    print(f"  Generated: {generated.shape}")
-    print(f"  Memory:    {final_memory.shape if final_memory is not None else None}")
-
-    # Test generation with longer prompt (should build memory)
-    print(f"\n--- Test: Generation with long prompt ---")
-    long_prompt = torch.randint(0, 256, (1, 128))
-    generated2, final_memory2 = model.generate(long_prompt, max_tokens=50)
-    print(f"  Prompt:    {long_prompt.shape}")
-    print(f"  Generated: {generated2.shape}")
-    print(f"  Memory:    {final_memory2.shape if final_memory2 is not None else None}")
-
-    # Test memory accumulation over multiple calls
-    print(f"\n--- Test: Memory accumulation ---")
-    memory = None
-    for i in range(5):
-        chunk = torch.randint(0, 256, (1, 128))
-        _, _, memory = model(chunk, memory=memory)
-        mem_shape = memory.shape if memory is not None else None
-        print(f"  Chunk {i+1}: input={chunk.shape}, memory={mem_shape}")
-
-    print("\n✓ All tests passed")
