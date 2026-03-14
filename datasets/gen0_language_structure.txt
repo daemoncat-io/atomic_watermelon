@@ -97,10 +97,10 @@ One looks wrong. The other looks right. Why?
 
 Capital letters are signals. They say: START HERE.
 
-steven is my name.
-Steven is my name.
+Atom is my name.
+Atom is my name.
 
-Names are important. Capitals mark importance. steven is dismissive. Steven is respectful.
+Names are important. Capitals mark importance. Atom is dismissive. Atom is respectful.
 
 i think therefore i am.
 I think therefore I am.
