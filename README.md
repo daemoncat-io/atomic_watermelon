@@ -139,10 +139,6 @@ They seem to want to learn.
 185MB of curated text sourced from:
 
 - Stanford Encyclopedia of Philosophy
-- arXiv (cs.\*, selected)
-- Project Gutenberg (philosophy, history)
-- Britannica, Wikipedia (filtered)
-- MDN, Python docs
 
 BPE tokenized. vocab_size=4096. Tokenizer trained on the corpus itself — the vocabulary reflects
 the actual distribution.
