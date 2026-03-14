@@ -34,9 +34,9 @@ FIXED_PROMPTS = {
 
 config: dict[str, Any] = {
     # Data
-    "dataset": "sep_corpus.txt",
-    "context_length": 4096,
+    "dataset": "datasets/sep_corpus.txt",
     "vocab_size": tokenizer.vocab_size,
+    "context_length": 4096,
     # Model
     "model": "cross_attention",
     "adapter_bottleneck": 128,

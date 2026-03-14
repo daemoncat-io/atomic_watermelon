@@ -1,0 +1,80 @@
+{
+  "run_id": "20260313_223621",
+  "config": {
+    "dataset": "datasets/sep_corpus.txt",
+    "vocab_size": 4096,
+    "context_length": 4096,
+    "model": "cross_attention",
+    "adapter_bottleneck": 128,
+    "compress_chunk": 128,
+    "memory_slots": 32,
+    "d_model": 512,
+    "dropout": 0.2,
+    "n_layers": 6,
+    "n_heads": 4,
+    "d_ff": 2048,
+    "learning_rate": 0.0003,
+    "mx_divergence": 1.5,
+    "max_grad_norm": 1.0,
+    "weight_decay": 0.01,
+    "batch_size": 1,
+    "device": "mps",
+    "patience": 25,
+    "epochs": 500,
+    "detach_memory_grad": false,
+    "memory_shards": 1
+  },
+  "model_architecture": {
+    "param_count": 33656577,
+    "trainable_params": 33656577,
+    "d_model": 512,
+    "n_heads": 4,
+    "max_seq_len": 4096,
+    "memory_slots": 32,
+    "compress_chunk": 128
+  },
+  "system": {
+    "python_version": "Python 3.14.0",
+    "torch_version": "2.10.0",
+    "torch_num_threads": 24,
+    "torch_num_interop_threads": 32,
+    "cpu_model": "Apple M3 Ultra",
+    "cpu_cores_physical": 32,
+    "cpu_cores_logical": 32,
+    "cpu_freq_mhz": {
+      "current": 4056,
+      "min": 1020,
+      "max": 4056
+    },
+    "ram_total_gb": 512.0,
+    "hostname": "daemon-node-zero.local",
+    "os": "Darwin 25.2.0",
+    "gpu": "Apple Silicon (MPS)",
+    "gpu_cores": 80,
+    "mps_recommended_max_gb": 464.0
+  },
+  "randomness": {
+    "torch_initial_seed": 42,
+    "torch_rng_state_hash": "507fdee33f771802",
+    "python_random_sample": 0.6413993165658994
+  },
+  "started_at": "2026-03-13T22:36:21.675781",
+  "epochs": [],
+  "best": null,
+  "stopped_at": null,
+  "stop_reason": null,
+  "total_training_time_sec": null,
+  "data": {
+    "dataset_hash": "3084f8c08c5127cb",
+    "vocab_size": 4096,
+    "context_length": 4096,
+    "train_samples": 4120,
+    "val_samples": 1373,
+    "train_tokens": 16875520,
+    "val_tokens": 5623808,
+    "train_batches": 4120,
+    "val_batches": 1373,
+    "batch_size": 1,
+    "tokens_per_batch": 4096
+  }
+}
