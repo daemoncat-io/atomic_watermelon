@@ -1,5 +1,5 @@
 """
-Training Logger for Atomic Watermelon
+Training Logger — epoch-based logging with system telemetry.
 """
 
 from torch.utils.data import DataLoader
@@ -222,6 +222,7 @@ class TrainingLog:
         stats = {
             "cpu": {
                 "total_percent": psutil.cpu_percent(),
+                "active_cores": active_cores,
                 "process_percent": process.cpu_percent(),
                 "process_threads": process.num_threads(),
             },
@@ -250,21 +251,11 @@ class TrainingLog:
         train_loader: DataLoader,
         val_loader: DataLoader,
     ):
-        """
-        Set dataset information from the trainer.
-
-        Args:
-            dataset: The full dataset (must have .hash and .vocab_size attributes)
-            train_size: Number of training samples
-            val_size: Number of validation samples
-            train_loader: Training DataLoader
-            val_loader: Validation DataLoader
-        """
         context_length = self.config["context_length"]
 
         self.data["data"] = {
             "dataset_hash": dataset.hash,
-            "vocab_size": dataset.vocab_size,
+            "vocab_size": getattr(dataset, "vocab_size", 256),
             "context_length": context_length,
             "train_samples": train_size,
             "val_samples": val_size,
@@ -288,19 +279,6 @@ class TrainingLog:
         is_best: bool = False,
         sample: dict[str, str] | None = None,
     ):
-        """
-        Log metrics for a completed epoch.
-
-        Args:
-            epoch: Epoch number (0-indexed)
-            train_loss: Average training loss for the epoch
-            val_loss: Average validation loss for the epoch
-            epoch_time_sec: Time taken for the epoch in seconds
-            lr: Current learning rate
-            grad_norm: Gradient norm (pre-clipping, from last batch)
-            is_best: Whether this is the best validation loss so far
-            sample: Optional dict of sample generations
-        """
         entry = {
             "epoch": epoch,
             "train_loss": round(train_loss, 6),
@@ -330,12 +308,6 @@ class TrainingLog:
         self._save()
 
     def stop(self, reason: str):
-        """
-        Finalize the training log with summary statistics.
-
-        Args:
-            reason: Stop reason ('early_stopping', 'completed', 'interrupted', etc.)
-        """
         self.data["stopped_at"] = datetime.now().isoformat()
         self.data["stop_reason"] = reason
         self.data["total_training_time_sec"] = round(time.time() - self._start_time, 2)

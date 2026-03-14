@@ -20,7 +20,7 @@ import random
 import torch
 import time
 
-from models.logger import TrainingLog
+from trainers.logger_aw import TrainingLog
 from models.aiayn import Transformer
 
 

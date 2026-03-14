@@ -4,14 +4,18 @@ decoder-only
 """
 
 from torch.utils.data import DataLoader, Dataset
+from pathlib import Path
 from typing import Any
 from tqdm import tqdm
 import hashlib
 import torch
 import time
+import sys
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from logger_single_mode import TrainingLog
 from models.decoder import Decoder
-from models.logger import TrainingLog
 
 config: dict[str, Any] = {
     # Data

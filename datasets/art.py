@@ -4,16 +4,16 @@ import urllib.error
 import time
 
 # ── Config ────────────────────────────────────────────────────────────────────
-OUTPUT_FILE = "datasets/smarthistory_corpus.txt"
-BASE_URL = "https://smarthistory.org"
-TOC_URL = "https://smarthistory.org/smarthistory-table-of-contents/"
-REQUEST_DELAY = 2.0
-MIN_DOC_CHARS = 2_000
-MAX_DOC_CHARS = 200_000
-REQUEST_TIMEOUT = 30
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (research corpus builder; respectful crawl; delay=2s)"
 }
+TOC_URL = "https://smarthistory.org/smarthistory-table-of-contents/"
+OUTPUT_FILE = "datasets/smarthistory_corpus.txt"
+BASE_URL = "https://smarthistory.org"
+MAX_DOC_CHARS = 200_000
+MIN_DOC_CHARS = 2_000
+REQUEST_TIMEOUT = 30
+REQUEST_DELAY = 2.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 

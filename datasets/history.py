@@ -4,18 +4,18 @@ import urllib.error
 import time
 
 # ── Config ────────────────────────────────────────────────────────────────────
-OUTPUT_FILE = "datasets/worldhistory_corpus.txt"
-BASE_URL = "https://www.worldhistory.org"
-INDEX_URL = "https://www.worldhistory.org/article/"
-REQUEST_DELAY = 2.0
-MIN_DOC_CHARS = 2_000
-MAX_DOC_CHARS = 200_000
-REQUEST_TIMEOUT = 30
-# WHE paginates the article index — scrape up to this many pages
-MAX_INDEX_PAGES = 100
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (research corpus builder; respectful crawl; delay=2s)"
 }
+INDEX_URL = "https://www.worldhistory.org/article/"
+OUTPUT_FILE = "datasets/worldhistory_corpus.txt"
+BASE_URL = "https://www.worldhistory.org"
+MAX_DOC_CHARS = 200_000
+MIN_DOC_CHARS = 2_000
+# WHE paginates the article index — scrape up to this many pages
+MAX_INDEX_PAGES = 100
+REQUEST_TIMEOUT = 30
+REQUEST_DELAY = 2.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 

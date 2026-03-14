@@ -4,16 +4,16 @@ import urllib.error
 import time
 
 # ── Config ────────────────────────────────────────────────────────────────────
-OUTPUT_FILE = "sep_corpus.txt"
-SEP_BASE = "https://plato.stanford.edu"
-CONTENTS_URL = "https://plato.stanford.edu/contents.html"
-REQUEST_DELAY = 2.0
-MIN_DOC_CHARS = 2_000
-MAX_DOC_CHARS = 200_000
-REQUEST_TIMEOUT = 30
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (research corpus builder; respectful crawl; delay=2s)"
 }
+CONTENTS_URL = "https://plato.stanford.edu/contents.html"
+SEP_BASE = "https://plato.stanford.edu"
+OUTPUT_FILE = "sep_corpus.txt"
+MAX_DOC_CHARS = 200_000
+MIN_DOC_CHARS = 2_000
+REQUEST_TIMEOUT = 30
+REQUEST_DELAY = 2.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 

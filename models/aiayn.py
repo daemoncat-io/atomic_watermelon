@@ -22,11 +22,11 @@ MultiHead(Q, K, V) = Concat(head_1, ..., head_h) W^O
 where head_i = Attention(QW_i^Q, KW_i^K, VW_i^V)
 """
 
-import math
-import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
+import torch.nn as nn
+import torch
+import math
 
 
 class ScaledDotProductAttention(nn.Module):
