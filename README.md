@@ -248,10 +248,7 @@ under DaemonCat LLC.
 The combination — dual execution modes on shared weights, adapters for distribution shift,
 compressive memory with full gradient flow, cross-attention bridge, no skip gates — does not
 appear in prior literature. The closest neighbors are Compressive Transformer (DeepMind, 2019),
-Subformer (2021), and adapter methods generally. None fuse them this way. None instantiate
-dual-mode execution on a single shared weight set.
-
-Search was done. This is novel.
+Subformer (2021), and adapter methods generally.
 
 ---
 
