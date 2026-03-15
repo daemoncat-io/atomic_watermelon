@@ -169,7 +169,7 @@ main.py
 ```bash
 bash init_venv.sh
 source atomic_watermelon_venv/bin/activate
-python3 datasets/main.py
+python3 main.py
 ```
 
 This will automate the cold start and spin up the SEP scrapper.
