@@ -172,7 +172,7 @@ source atomic_watermelon_venv/bin/activate
 python3 main.py
 ```
 
-This will automate the cold start and spin up the SEP scrapper.
+This will automate the cold start.
 
 The encoder/decoder single-mode baselines use the gen0 dataset. The AIAYN baseline uses the SEP corpus. All of this is configurable.
 
