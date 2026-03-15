@@ -169,24 +169,10 @@ main.py
 ```bash
 bash init_venv.sh
 source atomic_watermelon_venv/bin/activate
-python3 datasets/sep.py
+python3 datasets/main.py
 ```
 
 This will automate the cold start and spin up the SEP scrapper.
-
-Then:
-
-```bash
-python3 datasets/bpe.py
-```
-
-This will tokenize the corpus.
-
-Then:
-
-```bash
-python3 main.py
-```
 
 The encoder/decoder single-mode baselines use the gen0 dataset. The AIAYN baseline uses the SEP corpus. All of this is configurable.
 
