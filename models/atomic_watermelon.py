@@ -125,11 +125,8 @@ class BridgeBlock(nn.Module):
 
 class AtomicWatermelon(nn.Module):
     """
-    No bridge ablation.
-
     The encoder owns the weights.
     The decoder shares the encoder's layers directly.
-    No cross-attention — decoder never explicitly attends to encoder output.
     The encoder still maintains memory for its own bidirectional processing.
     """
 
