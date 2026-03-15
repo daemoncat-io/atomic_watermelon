@@ -1,20 +1,15 @@
 """
-Atomic Watermelon — No Bridge Ablation
+Atomic Watermelon — Substrate Ablation
 
-Dual mode shared weight transformer with memory compression.
-No adapter. No cross-attention. Pure shared weights.
+Dual mode shared weight transformer. Nothing else.
+No adapter. No cross-attention. No memory.
 
-Encoder: bidirectional, maintains compressed memory across calls
+Encoder: bidirectional attention over current context
 Decoder: borrows encoder weights directly, causal mask only
 
-This ablation isolates the contribution of cross-attention.
-If this collapses to decoder-only behavior, cross-attention was the bridge.
-If it doesn't, the shared weights alone are doing the work.
-
-Memory structure: [compressed_slots | current_context]
-- Compressed slots: fixed-size buffer of summarized past context
-- Current context: full-resolution recent tokens
-- When current overflows, oldest chunks compress into memory slots
+This is the floor. Two views of the same weights on the same input,
+differentiated only by masking. If dual-mode behavior survives here,
+shared weights ARE the bridge. Everything else is infrastructure.
 """
 
 import torch.nn.functional as F
@@ -76,9 +71,6 @@ class BridgeBlock(nn.Module):
     Encoder: bidirectional attention
     Decoder: borrows encoder weights directly, causal mask only
 
-    No cross-attention. No adapter. The decoder sees encoder state
-    only through the shared weights themselves.
-
     Data flow per block:
         enc_x  -> bidirectional self-attn -> FF -> enc_x'
         dec_x  -> causal self-attn (shared weights) -> FF (shared weights) -> dec_x'
@@ -103,8 +95,8 @@ class BridgeBlock(nn.Module):
 
     def forward(
         self,
-        enc_x: torch.Tensor,  # [B, M+T, C] memory + current
-        dec_x: torch.Tensor,  # [B, T, C]   current only
+        enc_x: torch.Tensor,  # [B, T, C]
+        dec_x: torch.Tensor,  # [B, T, C]
         dec_causal_mask: torch.Tensor,  # [1, 1, T, T]
     ) -> tuple[torch.Tensor, torch.Tensor]:
 
@@ -125,9 +117,12 @@ class BridgeBlock(nn.Module):
 
 class AtomicWatermelon(nn.Module):
     """
+    The floor.
+
     The encoder owns the weights.
     The decoder shares the encoder's layers directly.
-    The encoder still maintains memory for its own bidirectional processing.
+    Same input, same weights, different masks.
+    Nothing else.
     """
 
     def __init__(
@@ -139,32 +134,20 @@ class AtomicWatermelon(nn.Module):
         d_ff: int = 2048,
         max_seq_len: int = 2048,
         dropout: float = 0.1,
-        memory_slots: int = 32,
-        compress_chunk: int = 64,
     ):
         super().__init__()
 
         self.d_model = d_model
         self.max_seq_len = max_seq_len
-        self.memory_slots = memory_slots
-        self.compress_chunk = compress_chunk
-        self.n_heads = n_heads
 
         # Embeddings
         self.tok_emb = nn.Embedding(vocab_size, d_model)
         self.pos_emb = nn.Embedding(max_seq_len, d_model)
 
-        # Learned memory position embeddings (memory slots don't use sequential positions)
-        self.mem_pos_emb = nn.Embedding(memory_slots, d_model)
-
         # Blocks
         self.blocks = nn.ModuleList(
             [BridgeBlock(d_model, n_heads, d_ff, dropout) for _ in range(n_layers)]
         )
-
-        # Compression network
-        self.compress_proj = nn.Linear(d_model, d_model)
-        self.compress_gate = nn.Linear(d_model, 1)
 
         # Output
         self.ln_f = nn.LayerNorm(d_model)
@@ -183,65 +166,6 @@ class AtomicWatermelon(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def _compress_chunk(self, chunk: torch.Tensor) -> torch.Tensor:
-        """Compress a chunk of encoder states into a single summary vector."""
-        weights = torch.softmax(self.compress_gate(chunk), dim=1)  # [B, chunk, 1]
-        summary = (weights * self.compress_proj(chunk)).sum(
-            dim=1, keepdim=True
-        )  # [B, 1, C]
-        return summary
-
-    def _update_memory(
-        self,
-        enc_x: torch.Tensor,
-        memory: torch.Tensor | None,
-        n_memory: int,
-    ) -> torch.Tensor | None:
-        """
-        Update memory with newly processed content.
-
-        enc_x:    [B, M+T, C] full encoder output (memory prefix + current)
-        memory:   [B, M, C]   previous memory or None
-        n_memory: int         number of memory positions in enc_x
-
-        Returns: [B, M', C] updated memory
-        """
-        new_content = enc_x[:, n_memory:, :]  # [B, T, C]
-        T = new_content.shape[1]
-
-        if T < self.compress_chunk:
-            return memory
-
-        n_chunks = T // self.compress_chunk
-        summaries = []
-
-        for i in range(n_chunks):
-            start = i * self.compress_chunk
-            end = start + self.compress_chunk
-            chunk = new_content[:, start:end, :]
-            summaries.append(self._compress_chunk(chunk))
-
-        if not summaries:
-            return memory
-
-        new_summaries = torch.cat(summaries, dim=1)  # [B, n_chunks, C]
-
-        if memory is None:
-            if new_summaries.shape[1] <= self.memory_slots:
-                return new_summaries
-            return new_summaries[:, -self.memory_slots :, :]
-
-        combined = torch.cat([memory, new_summaries], dim=1)
-
-        if combined.shape[1] <= self.memory_slots:
-            return combined
-
-        overflow = combined.shape[1] - self.memory_slots
-        to_compress = combined[:, : overflow + 1, :]
-        merged = self._compress_chunk(to_compress)
-
-        return torch.cat([merged, combined[:, overflow + 1 :, :]], dim=1)
-
     def forward(
         self,
         x: torch.Tensor,
@@ -249,17 +173,17 @@ class AtomicWatermelon(nn.Module):
         memory: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         """
-        Forward pass with optional memory.
+        Forward pass.
 
         Args:
             x:       [B, T]    input token ids
             targets: [B, T]    target token ids for loss
-            memory:  [B, M, C] compressed memory from previous calls
+            memory:  ignored, kept for API compatibility
 
         Returns:
             logits:     [B, T, V]
             loss:       scalar or None
-            new_memory: [B, M', C] updated memory
+            new_memory: always None
         """
 
         B, T = x.shape
@@ -267,39 +191,27 @@ class AtomicWatermelon(nn.Module):
 
         # Embed current input
         tok = self.tok_emb(x) * math.sqrt(self.d_model)
-        pos = self.pos_emb(torch.arange(T, device=device))  # [T, C]
+        pos = self.pos_emb(torch.arange(T, device=device))
         x_emb = tok + pos  # [B, T, C]
 
-        # Build encoder input: memory (if any) + current
-        if memory is not None:
-            M = memory.shape[1]
-            mem_pos = self.mem_pos_emb(torch.arange(M, device=device))  # [M, C]
-            memory_positioned = memory + mem_pos
-            enc_x = torch.cat([memory_positioned, x_emb], dim=1)  # [B, M+T, C]
-            n_memory = M
-        else:
-            enc_x = x_emb
-            n_memory = 0
+        # Same input, two paths
+        enc_x = x_emb
+        dec_x = x_emb
 
-        # Decoder input: current segment only
-        dec_x = x_emb  # [B, T, C]
-
-        # Decoder causal mask: [1, 1, T, T]
+        # Decoder causal mask
         dec_causal_mask = self.attention_mask[:, :, :T, :T]
 
         for block in self.blocks:
             enc_x, dec_x = block(enc_x, dec_x, dec_causal_mask)
 
         # Output from decoder stream
-        logits = self.lm_head(self.ln_f(dec_x))  # [B, T, V]
+        logits = self.lm_head(self.ln_f(dec_x))
 
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
 
-        new_memory = self._update_memory(enc_x, memory, n_memory)
-
-        return logits, loss, new_memory
+        return logits, loss, None
 
     @torch.no_grad()
     def generate(
@@ -311,34 +223,20 @@ class AtomicWatermelon(nn.Module):
         memory: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
-        Generate tokens with persistent memory.
-
-        Processes prompt in compress_chunk sized pieces to build memory, then
-        generates one token at a time while maintaining a sliding window buffer.
+        Generate tokens. No memory, just autoregressive generation.
 
         Returns:
             generated: [B, T+max_tokens]
-            memory:    updated memory state
+            memory:    always None
         """
         self.eval()
         generated = x.clone()
 
-        prompt_len = x.shape[1]
-        pos = 0
-        while pos < prompt_len:
-            end = min(pos + self.compress_chunk, prompt_len)
-            chunk = x[:, pos:end]
-            _, _, memory = self(chunk, memory=memory)
-            pos = end
-
-        leftover_start = (prompt_len // self.compress_chunk) * self.compress_chunk
-        buffer = x[:, leftover_start:]
-
-        if buffer.shape[1] == 0:
-            buffer = x[:, -1:]
-
         for _ in range(max_tokens):
-            logits, _, new_memory = self(buffer, memory=memory)
+            # Truncate to max_seq_len if needed
+            ctx = generated[:, -self.max_seq_len :]
+
+            logits, _, _ = self(ctx)
             logits = logits[:, -1, :] / temperature
 
             if top_k == 1 and temperature == 1.0:
@@ -350,16 +248,5 @@ class AtomicWatermelon(nn.Module):
                 next_tok = torch.multinomial(probs, 1)
 
             generated = torch.cat([generated, next_tok], dim=1)
-            buffer = torch.cat([buffer, next_tok], dim=1)
 
-            if new_memory is not None and (
-                memory is None or new_memory.shape[1] > memory.shape[1]
-            ):
-                memory = new_memory
-                buffer = buffer[
-                    :, -(buffer.shape[1] % self.compress_chunk or self.compress_chunk) :
-                ]
-                if buffer.shape[1] == 0:
-                    buffer = next_tok
-
-        return generated, memory
+        return generated, None

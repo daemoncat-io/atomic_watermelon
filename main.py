@@ -1,6 +1,6 @@
 """
-Training Loop for Atomic Watermelon
-Shared encoder weights. Cross-attention bridge. Compressive memory.
+Training Loop for Atomic Watermelon — Substrate Ablation
+Shared encoder weights. Dual mask. Nothing else.
 """
 
 from torch.utils.data import DataLoader, Dataset
@@ -38,8 +38,6 @@ config: dict[str, Any] = {
     "context_length": 4096,
     # Model
     "model": "atomic_watermelon",
-    "compress_chunk": 128,
-    "memory_slots": 32,
     "d_model": 512,
     "dropout": 0.2,
     "n_layers": 6,
@@ -54,9 +52,6 @@ config: dict[str, Any] = {
     "batch_size": 1,
     "patience": 25,
     "epochs": 500,
-    # Memory handling
-    "detach_memory_grad": True,  # False => context = compress expectation + delta from current
-    "memory_shards": 1,
 }
 
 
@@ -70,13 +65,11 @@ class TextDataset(Dataset):
         corpus_path: str,
         tok: BPETokenizer,
         context_length: int,
-        n_segments: int,
     ):
         self.tok = tok
         self.vocab_size = tok.vocab_size
-        self.n_segments = n_segments
-        self.segment_length = context_length // n_segments
-        self.tokens_needed = self.segment_length * n_segments + 1
+        self.context_length = context_length
+        self.tokens_needed = context_length + 1
         self.chunk_bytes = self.tokens_needed * 6
 
         self._fh = open(corpus_path, "rb")
@@ -100,14 +93,10 @@ class TextDataset(Dataset):
             ids = ids + [self.tok.pad_id] * (self.tokens_needed - len(ids))
 
         t = torch.tensor(ids, dtype=torch.long)
+        x = t[: self.context_length]
+        y = t[1 : self.context_length + 1]
 
-        x_segs, y_segs = [], []
-        for i in range(self.n_segments):
-            s = i * self.segment_length
-            x_segs.append(t[s : s + self.segment_length])
-            y_segs.append(t[s + 1 : s + self.segment_length + 1])
-
-        return torch.stack(x_segs), torch.stack(y_segs)
+        return x, y
 
     def __del__(self):
         self.mm.close()
@@ -143,7 +132,6 @@ def train():
         config["dataset"],
         tokenizer,
         config["context_length"],
-        config["memory_shards"],
     )
 
     print(f"Corpus: {dataset.file_size / 1024**3:.2f} GiB raw text")
@@ -168,8 +156,6 @@ def train():
         d_ff=config["d_ff"],
         max_seq_len=config["context_length"],
         dropout=config["dropout"],
-        memory_slots=config["memory_slots"],
-        compress_chunk=config["compress_chunk"],
     ).to(device)
 
     optimizer = torch.optim.AdamW(
@@ -188,7 +174,6 @@ def train():
     print(f"Val batches: {len(val_loader)}")
     print(f"Test batches: {len(test_loader)}")
     print(f"Parameters: {log.data['model_architecture']['param_count']:,}")
-    print(f"Memory shards: {config['memory_shards']}")
 
     best_loss = float("inf")
     patience_counter = 0
@@ -202,24 +187,13 @@ def train():
 
         for batch in tqdm(train_loader, desc=f"Epoch {epoch} Train"):
 
-            x_segments, y_segments = batch
-            x_segments = x_segments.to(device)
-            y_segments = y_segments.to(device)
+            x, y = batch
+            x = x.to(device)
+            y = y.to(device)
 
-            B, n_seg, T = x_segments.shape
+            _, loss, _ = model(x, targets=y)
 
-            batch_loss = 0.0
-            memory = None
-
-            for seg_idx in range(n_seg):
-                x = x_segments[:, seg_idx, :].contiguous()
-                y = y_segments[:, seg_idx, :].contiguous()
-
-                _, loss, memory = model(x, targets=y, memory=memory)
-                batch_loss += loss
-
-            batch_loss = batch_loss / n_seg
-            batch_loss.backward()
+            loss.backward()
 
             last_grad_norm = get_grad_norm(model)
 
@@ -231,29 +205,19 @@ def train():
             optimizer.step()
             optimizer.zero_grad()
 
-            train_loss += batch_loss.item()
+            train_loss += loss.item()
 
         model.eval()
         val_loss = 0.0
 
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"Epoch {epoch} Val"):
-                x_segments, y_segments = batch
-                x_segments = x_segments.to(device)
-                y_segments = y_segments.to(device)
+                x, y = batch
+                x = x.to(device)
+                y = y.to(device)
 
-                B, n_seg, T = x_segments.shape
-                batch_loss = 0.0
-                memory = None
-
-                for seg_idx in range(n_seg):
-                    x = x_segments[:, seg_idx, :].contiguous()
-                    y = y_segments[:, seg_idx, :].contiguous()
-                    _, loss, memory = model(x, targets=y, memory=memory)
-                    batch_loss += loss
-
-                batch_loss = batch_loss / n_seg
-                val_loss += batch_loss.item()
+                _, loss, _ = model(x, targets=y)
+                val_loss += loss.item()
 
         train_loss /= len(train_loader)
         val_loss /= len(val_loader)
@@ -337,22 +301,12 @@ def train():
     test_loss = 0.0
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Test"):
-            x_segments, y_segments = batch
-            x_segments = x_segments.to(device)
-            y_segments = y_segments.to(device)
+            x, y = batch
+            x = x.to(device)
+            y = y.to(device)
 
-            B, n_seg, T = x_segments.shape
-            batch_loss = 0.0
-            memory = None
-
-            for seg_idx in range(n_seg):
-                x = x_segments[:, seg_idx, :].contiguous()
-                y = y_segments[:, seg_idx, :].contiguous()
-                _, loss, memory = model(x, targets=y, memory=memory)
-                batch_loss += loss
-
-            batch_loss = batch_loss / n_seg
-            test_loss += batch_loss.item()
+            _, loss, _ = model(x, targets=y)
+            test_loss += loss.item()
 
     test_loss /= len(test_loader)
 
