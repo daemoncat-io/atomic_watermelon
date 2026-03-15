@@ -93,15 +93,15 @@ config: dict[str, Any] = {
     "d_ff": 2048,
     # Training
     "device": "mps" if torch.backends.mps.is_available() else "cpu",
+    "persistent_workers": True,
     "learning_rate": 3e-4,
     "mx_divergence": 1.5,
     "max_grad_norm": 1.0,
     "weight_decay": 0.01,
-    "batch_size": 1,
+    "prefetch_factor": 2,
     "accum_steps": 8,
     "num_workers": 4,
-    "prefetch_factor": 2,
-    "persistent_workers": True,
+    "batch_size": 1,
     "patience": 25,
     "epochs": 500,
 }
