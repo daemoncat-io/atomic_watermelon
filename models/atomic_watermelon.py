@@ -1,10 +1,15 @@
 """
-Atomic Watermelon
+Atomic Watermelon — No Bridge Ablation
 
-A dual mode mutual weight focused attention transformer with memory compression
+Dual mode shared weight transformer with memory compression.
+No adapter. No cross-attention. Pure shared weights.
 
 Encoder: bidirectional, maintains compressed memory across calls
-Decoder: borrows encoder weights, causal mask, pulls from memory
+Decoder: borrows encoder weights directly, causal mask only
+
+This ablation isolates the contribution of cross-attention.
+If this collapses to decoder-only behavior, cross-attention was the bridge.
+If it doesn't, the shared weights alone are doing the work.
 
 Memory structure: [compressed_slots | current_context]
 - Compressed slots: fixed-size buffer of summarized past context
@@ -52,48 +57,6 @@ class MultiHeadAttention(nn.Module):
         return self.w_o(out)
 
 
-class CrossAttention(nn.Module):
-    """Decoder attends to encoder with separate Q projection."""
-
-    def __init__(self, d_model: int, n_heads: int, dropout: float = 0.1):
-        super().__init__()
-        assert d_model % n_heads == 0
-
-        self.n_heads = n_heads
-        self.d_model = d_model
-        self.d_k = d_model // n_heads
-
-        self.w_q = nn.Linear(d_model, d_model, bias=False)
-        self.w_kv = nn.Linear(d_model, 2 * d_model, bias=False)
-        self.w_o = nn.Linear(d_model, d_model, bias=False)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(
-        self,
-        q_input: torch.Tensor,
-        kv_input: torch.Tensor,
-        mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        B, T_q, C = q_input.shape
-        T_kv = kv_input.shape[1]
-
-        q = self.w_q(q_input).reshape(B, T_q, self.n_heads, self.d_k).transpose(1, 2)
-        kv = (
-            self.w_kv(kv_input)
-            .reshape(B, T_kv, 2, self.n_heads, self.d_k)
-            .permute(2, 0, 3, 1, 4)
-        )
-        k, v = kv[0], kv[1]
-
-        attn = (q @ k.transpose(-2, -1)) / math.sqrt(self.d_k)
-        if mask is not None:
-            attn = attn.masked_fill(mask == 0, float("-inf"))
-        attn = self.dropout(F.softmax(attn, dim=-1))
-
-        out = (attn @ v).transpose(1, 2).reshape(B, T_q, C)
-        return self.w_o(out)
-
-
 class FeedForward(nn.Module):
     def __init__(self, d_model: int, d_ff: int, dropout: float = 0.1):
         super().__init__()
@@ -108,41 +71,17 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
-class Adapter(nn.Module):
-    """
-    Bottleneck adapter for distribution shift between encoder and decoder.
-
-    Projects down to a smaller dimension, applies nonlinearity, projects back.
-    This lets the decoder "translate" its activations into the encoder's
-    expected distribution before borrowing encoder weights.
-    """
-
-    def __init__(self, d_model: int, bottleneck: int = 64, dropout: float = 0.1):
-        super().__init__()
-        self.down = nn.Linear(d_model, bottleneck)
-        self.up = nn.Linear(bottleneck, d_model)
-        self.ln = nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        residual = self.dropout(self.up(F.gelu(self.down(self.ln(x)))))
-        return x + residual
-
-
 class BridgeBlock(nn.Module):
     """
     Encoder: bidirectional attention
-    Decoder: borrows encoder weights via adapters, causal mask, then collapses
-             through cross-attention bridge against the full encoder output
-             (memory slots + current context)
+    Decoder: borrows encoder weights directly, causal mask only
 
-    The decoder uses lightweight adapters to transform its activations
-    before passing through shared encoder layers. This handles the
-    distribution mismatch while keeping most parameters shared.
+    No cross-attention. No adapter. The decoder sees encoder state
+    only through the shared weights themselves.
 
     Data flow per block:
         enc_x  -> bidirectional self-attn -> FF -> enc_x'
-        dec_x  -> adapted causal self-attn -> cross-attn(enc_x') -> adapted FF -> dec_x'
+        dec_x  -> causal self-attn (shared weights) -> FF (shared weights) -> dec_x'
     """
 
     def __init__(
@@ -151,26 +90,14 @@ class BridgeBlock(nn.Module):
         n_heads: int,
         d_ff: int,
         dropout: float = 0.1,
-        adapter_bottleneck: int = 64,
     ):
         super().__init__()
 
-        # Encoder
+        # Encoder (shared with decoder)
         self.enc_ln1 = nn.LayerNorm(d_model)
         self.enc_attn = MultiHeadAttention(d_model, n_heads, dropout)
         self.enc_ln2 = nn.LayerNorm(d_model)
         self.enc_ff = FeedForward(d_model, d_ff, dropout)
-
-        # Decoder [Adapted]
-        self.dec_adapt_pre_attn = Adapter(d_model, adapter_bottleneck, dropout)
-        self.dec_adapt_post_attn = Adapter(d_model, adapter_bottleneck, dropout)
-        self.dec_adapt_pre_ff = Adapter(d_model, adapter_bottleneck, dropout)
-        self.dec_adapt_post_ff = Adapter(d_model, adapter_bottleneck, dropout)
-
-        # Cross-attention bridge: decoder queries, encoder keys/values
-        self.cross_attn = CrossAttention(d_model, n_heads, dropout)
-        self.cross_ln = nn.LayerNorm(d_model)
-        self.cross_adapt = Adapter(d_model, adapter_bottleneck, dropout)
 
         self.dropout = nn.Dropout(dropout)
 
@@ -179,36 +106,31 @@ class BridgeBlock(nn.Module):
         enc_x: torch.Tensor,  # [B, M+T, C] memory + current
         dec_x: torch.Tensor,  # [B, T, C]   current only
         dec_causal_mask: torch.Tensor,  # [1, 1, T, T]
-        cross_mask: torch.Tensor,  # [1, 1, T, M+T]
     ) -> tuple[torch.Tensor, torch.Tensor]:
 
         # --- Encoder: full bidirectional self-attention + FF ---
         enc_x = enc_x + self.dropout(self.enc_attn(self.enc_ln1(enc_x), mask=None))
         enc_x = enc_x + self.dropout(self.enc_ff(self.enc_ln2(enc_x)))
 
-        # --- Decoder: adapted causal self-attention (borrows encoder weights) ---
-        dec_adapted = self.dec_adapt_pre_attn(dec_x)
-        dec_attn_out = self.enc_attn(self.enc_ln1(dec_adapted), mask=dec_causal_mask)
-        dec_x = dec_x + self.dropout(self.dec_adapt_post_attn(dec_attn_out))
+        # --- Decoder: causal self-attention (shared encoder weights) ---
+        dec_attn_out = self.enc_attn(self.enc_ln1(dec_x), mask=dec_causal_mask)
+        dec_x = dec_x + self.dropout(dec_attn_out)
 
-        # --- Cross-attention bridge: decoder queries enc_x (memory + current) ---
-        dec_cross_out = self.cross_attn(self.cross_ln(dec_x), enc_x, mask=cross_mask)
-        dec_x = dec_x + self.dropout(self.cross_adapt(dec_cross_out))
-
-        # --- Decoder: adapted FF (borrows encoder weights) ---
-        dec_adapted = self.dec_adapt_pre_ff(dec_x)
-        dec_ff_out = self.enc_ff(self.enc_ln2(dec_adapted))
-        dec_x = dec_x + self.dropout(self.dec_adapt_post_ff(dec_ff_out))
+        # --- Decoder: FF (shared encoder weights) ---
+        dec_ff_out = self.enc_ff(self.enc_ln2(dec_x))
+        dec_x = dec_x + self.dropout(dec_ff_out)
 
         return enc_x, dec_x
 
 
 class AtomicWatermelon(nn.Module):
     """
-    The encoder owns encoder weights.
-    The decoder [adapted] weights get passed through the encoder's layers.
-    Cross-attention collapses encoder state (memory + context) into the decoder.
-    The encoder maintains a fixed-size memory buffer of compressed past context.
+    No bridge ablation.
+
+    The encoder owns the weights.
+    The decoder shares the encoder's layers directly.
+    No cross-attention — decoder never explicitly attends to encoder output.
+    The encoder still maintains memory for its own bidirectional processing.
     """
 
     def __init__(
@@ -222,7 +144,6 @@ class AtomicWatermelon(nn.Module):
         dropout: float = 0.1,
         memory_slots: int = 32,
         compress_chunk: int = 64,
-        adapter_bottleneck: int = 64,
     ):
         super().__init__()
 
@@ -241,10 +162,7 @@ class AtomicWatermelon(nn.Module):
 
         # Blocks
         self.blocks = nn.ModuleList(
-            [
-                BridgeBlock(d_model, n_heads, d_ff, dropout, adapter_bottleneck)
-                for _ in range(n_layers)
-            ]
+            [BridgeBlock(d_model, n_heads, d_ff, dropout) for _ in range(n_layers)]
         )
 
         # Compression network
@@ -372,20 +290,8 @@ class AtomicWatermelon(nn.Module):
         # Decoder causal mask: [1, 1, T, T]
         dec_causal_mask = self.attention_mask[:, :, :T, :T]
 
-        # Cross-attention mask: [1, 1, T, M+T]
-        # Memory portion — fully visible to all decoder positions
-        # Current portion — causal
-        enc_len = enc_x.shape[1]
-        cross_mask = torch.ones(1, 1, T, enc_len, device=device)
-
-        if n_memory > 0:
-            current_causal = self.attention_mask[:, :, :T, :T]
-            cross_mask[:, :, :, n_memory:] = current_causal
-        else:
-            cross_mask = dec_causal_mask
-
         for block in self.blocks:
-            enc_x, dec_x = block(enc_x, dec_x, dec_causal_mask, cross_mask)
+            enc_x, dec_x = block(enc_x, dec_x, dec_causal_mask)
 
         # Output from decoder stream
         logits = self.lm_head(self.ln_f(dec_x))  # [B, T, V]

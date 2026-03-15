@@ -1,6 +1,6 @@
 """
 Training Loop for Atomic Watermelon
-Shared encoder weights via adapters. Cross-attention. Compressive memory.
+Shared encoder weights. Cross-attention bridge. Compressive memory.
 """
 
 from torch.utils.data import DataLoader, Dataset
@@ -38,7 +38,6 @@ config: dict[str, Any] = {
     "context_length": 4096,
     # Model
     "model": "atomic_watermelon",
-    "adapter_bottleneck": 128,
     "compress_chunk": 128,
     "memory_slots": 32,
     "d_model": 512,
@@ -171,7 +170,6 @@ def train():
         dropout=config["dropout"],
         memory_slots=config["memory_slots"],
         compress_chunk=config["compress_chunk"],
-        adapter_bottleneck=config["adapter_bottleneck"],
     ).to(device)
 
     optimizer = torch.optim.AdamW(
