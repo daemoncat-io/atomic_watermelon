@@ -540,6 +540,7 @@ class BPETokenizer:
 
         # Finalize
         self.inverse_vocab = {v: k for k, v in self.vocab.items()}
+        self._merge_ranks = {(a, b): i for i, (a, b) in enumerate(self.merges)}
 
         if verbose:
             print(f"\n  Final vocab size: {self.vocab_size}")
@@ -596,21 +597,27 @@ class BPETokenizer:
     # ================================================================
 
     def _apply_merges(self, tokens: list[str]) -> list[str]:
-        """Apply learned merges to a list of byte tokens."""
-        for a, b in self.merges:
-            merged = a + b
-            new_tokens: list[str] = []
-            i = 0
-            while i < len(tokens):
-                if i < len(tokens) - 1 and tokens[i] == a and tokens[i + 1] == b:
-                    new_tokens.append(merged)
-                    i += 2
-                else:
-                    new_tokens.append(tokens[i])
-                    i += 1
-            tokens = new_tokens
-            if len(tokens) == 1:
+        if len(tokens) <= 1:
+            return tokens
+
+        while True:
+            best_rank = len(self.merges)  # sentinel — no valid merge
+            best_i = -1
+
+            for i in range(len(tokens) - 1):
+                rank = self._merge_ranks.get(
+                    (tokens[i], tokens[i + 1]), len(self.merges)
+                )
+                if rank < best_rank:
+                    best_rank = rank
+                    best_i = i
+
+            if best_i == -1:
                 break
+
+            merged = tokens[best_i] + tokens[best_i + 1]
+            tokens = tokens[:best_i] + [merged] + tokens[best_i + 2 :]
+
         return tokens
 
     def encode(
@@ -673,6 +680,8 @@ class BPETokenizer:
         tok.merges = [tuple(m) for m in data["merges"]]
         tok.vocab = data["vocab"]
         tok.inverse_vocab = {v: k for k, v in tok.vocab.items()}
+        tok._merge_ranks = {(a, b): i for i, (a, b) in enumerate(tok.merges)}
+
         return tok
 
     # ================================================================

@@ -1,5 +1,6 @@
 {
 	"cSpell.words": [
+		"ACCUM",
 		"AIAYN",
 		"apitalization",
 		"autoencoding",
@@ -26,6 +27,7 @@
 		"multinomial",
 		"noheader",
 		"nounits",
+		"pretokenize",
 		"relatedposts",
 		"RLHF",
 		"SBIR",
@@ -36,7 +38,9 @@
 		"Subformer",
 		"sysname",
 		"tobytes",
+		"tofile",
 		"triu",
+		"unpickleable",
 		"vmax",
 		"vmin",
 		"worldhistory",
