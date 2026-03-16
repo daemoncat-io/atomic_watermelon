@@ -8,3 +8,4 @@ checkpoints/*
 */*_corpus.*
 */.DS_Store
 .DS_Store
+.env
