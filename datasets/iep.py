@@ -7,9 +7,9 @@ import time
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (research corpus builder; respectful crawl; delay=2s)"
 }
-TOC_URL = "https://smarthistory.org/smarthistory-table-of-contents/"
-OUTPUT_FILE = "datasets/smarthistory_corpus.txt"
-BASE_URL = "https://smarthistory.org"
+INDEX_URL = "https://iep.utm.edu/"
+IEP_BASE = "https://iep.utm.edu"
+OUTPUT_FILE = "datasets/iep_corpus.txt"
 MAX_DOC_CHARS = 200_000
 MIN_DOC_CHARS = 2_000
 REQUEST_TIMEOUT = 30
@@ -30,71 +30,52 @@ def fetch(url: str) -> str | None:
         return None
 
 
-class TOCParser(HTMLParser):
-    """
-    Extracts article URLs from Smarthistory's table of contents page.
-    TOC links are <a href="https://smarthistory.org/some-article/"> inside
-    the main post content — we collect all internal article hrefs.
-    """
+class EntryIndexParser(HTMLParser):
+    """Extracts entry slugs from the IEP index page."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.urls: list[str] = []
-        self._in_content = False
-        self._content_depth = 0
+        self.entries: list[str] = []
         self._all_hrefs: list[str] = []  # debug
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attr_dict = dict(attrs)
-        el_class = attr_dict.get("class", "") or ""
-
-        # Smarthistory uses WordPress — article body is div.entry-content
-        if tag == "div" and "entry-content" in el_class:
-            self._in_content = True
-            self._content_depth = 1
+        if tag != "a":
             return
-
-        if tag == "div" and self._in_content:
-            self._content_depth += 1
-
-        if tag == "a":
-            href = attr_dict.get("href", "") or ""
-            self._all_hrefs.append(href)
-            if (
-                self._in_content
-                and href.startswith(BASE_URL)
-                and href != TOC_URL
-                and "?" not in href
-                and "#" not in href
-                # exclude category/tag/author/page paths
-                and "/category/" not in href
-                and "/tag/" not in href
-                and "/author/" not in href
-                and "/page/" not in href
-                and href.rstrip("/") != BASE_URL
-            ):
-                self.urls.append(href)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "div" and self._in_content:
-            self._content_depth -= 1
-            if self._content_depth == 0:
-                self._in_content = False
+        for attr, val in attrs:
+            if attr == "href" and val:
+                self._all_hrefs.append(val)
+                # IEP entries are https://iep.utm.edu/{slug}/
+                # exclude meta pages: /, /about/, /submissions/, etc.
+                if (
+                    val.startswith(IEP_BASE + "/")
+                    and val.rstrip("/") != IEP_BASE
+                    and "?" not in val
+                    and "#" not in val
+                    and "/about" not in val
+                    and "/contact" not in val
+                    and "/submissions" not in val
+                    and "/category/" not in val
+                    and "/tag/" not in val
+                    and "/page/" not in val
+                    and "/author/" not in val
+                ):
+                    slug = val.rstrip("/").split("/")[-1]
+                    if slug:
+                        self.entries.append(slug)
 
 
 class ArticleParser(HTMLParser):
     """
-    Extracts clean prose from a Smarthistory article page.
-    Body lives in <div class="entry-content">.
-    Skips: figures, captions, nav, related posts, comments, scripts, styles.
+    Extracts clean prose from an IEP entry page.
+    IEP is WordPress — body lives in <div class="entry-content">.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self._in_content = False
-        self._content_depth = 0
+        self._depth_content = 0
         self._in_skip = False
-        self._skip_depth = 0
+        self._depth_skip = 0
         self._in_collect = False
         self._buf: list[str] = []
         self.paragraphs: list[str] = []
@@ -133,23 +114,23 @@ class ArticleParser(HTMLParser):
 
         if tag == "div" and "entry-content" in el_class:
             self._in_content = True
-            self._content_depth = 1
+            self._depth_content = 1
             return
 
         if not self._in_content:
             return
 
         if tag == "div":
-            self._content_depth += 1
+            self._depth_content += 1
 
-        if self._in_skip:
-            if tag in ("div", "figure", "aside", "nav", "footer"):
-                self._skip_depth += 1
+        if self._is_skip(tag, attr_dict) and not self._in_skip:
+            self._in_skip = True
+            self._depth_skip = 1
             return
 
-        if self._is_skip(tag, attr_dict):
-            self._in_skip = True
-            self._skip_depth = 1
+        if self._in_skip:
+            if tag == "div":
+                self._depth_skip += 1
             return
 
         if tag in self.PARA_TAGS:
@@ -161,15 +142,15 @@ class ArticleParser(HTMLParser):
             return
 
         if self._in_skip:
-            if tag in ("div", "figure", "aside", "nav", "footer"):
-                self._skip_depth -= 1
-                if self._skip_depth == 0:
+            if tag == "div":
+                self._depth_skip -= 1
+                if self._depth_skip == 0:
                     self._in_skip = False
             return
 
         if tag == "div":
-            self._content_depth -= 1
-            if self._content_depth == 0:
+            self._depth_content -= 1
+            if self._depth_content == 0:
                 self._in_content = False
             return
 
@@ -187,22 +168,21 @@ class ArticleParser(HTMLParser):
                 self._buf.append(cleaned)
 
 
-def parse_toc(html: str) -> list[str]:
-    parser = TOCParser()
+def parse_entry_index(html: str) -> list[str]:
+    parser = EntryIndexParser()
     parser.feed(html)
 
-    if not parser.urls:
-        print("  DEBUG — no article URLs matched. Sample hrefs:")
+    if not parser.entries:
+        print("  DEBUG — no entries matched. Sample hrefs:")
         for href in parser._all_hrefs[:30]:
             print(f"    {href}")
 
     seen: set[str] = set()
     unique: list[str] = []
-    for url in parser.urls:
-        norm = url.rstrip("/")
-        if norm not in seen:
-            seen.add(norm)
-            unique.append(url)
+    for slug in parser.entries:
+        if slug not in seen:
+            seen.add(slug)
+            unique.append(slug)
     return unique
 
 
@@ -213,16 +193,16 @@ def parse_article(html: str) -> str:
 
 
 def main() -> None:
-    print("Fetching Smarthistory table of contents...")
-    toc_html = fetch(TOC_URL)
-    if not toc_html:
-        print("Failed to fetch TOC page.")
+    print("Fetching IEP entry index...")
+    index_html = fetch(INDEX_URL)
+    if not index_html:
+        print("Failed to fetch index page.")
         return
 
-    urls = parse_toc(toc_html)
-    print(f"  {len(urls)} article URLs found\n")
+    entries = parse_entry_index(index_html)
+    print(f"  {len(entries)} entries found\n")
 
-    if not urls:
+    if not entries:
         return
 
     collected = 0
@@ -230,9 +210,9 @@ def main() -> None:
     skipped = 0
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
-        for i, url in enumerate(urls):
-            slug = url.rstrip("/").split("/")[-1]
-            print(f"[{i+1}/{len(urls)}] {slug}", end=" ... ", flush=True)
+        for i, slug in enumerate(entries):
+            url = f"{IEP_BASE}/{slug}/"
+            print(f"[{i+1}/{len(entries)}] {slug}", end=" ... ", flush=True)
 
             html = fetch(url)
             if not html:
@@ -255,9 +235,7 @@ def main() -> None:
             time.sleep(REQUEST_DELAY)
 
     print(
-        f"\nDone: {collected / (1024**2):.1f} MB"
-        f" | {written} entries"
-        f" | {skipped} skipped"
+        f"\nDone: {collected / (1024**2):.1f} MB | {written} entries | {skipped} skipped"
     )
 
 
