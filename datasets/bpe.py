@@ -701,7 +701,7 @@ class BPETokenizer:
 
 
 if __name__ == "__main__":
-    CORPUS = "sep_corpus.txt"
+    CORPUS = "datasets/sep_corpus.txt"
     VOCAB_SIZE = 4096
     OUT_PATH = "datasets/tokenizer.json"
 

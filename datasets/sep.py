@@ -9,7 +9,7 @@ HEADERS = {
 }
 CONTENTS_URL = "https://plato.stanford.edu/contents.html"
 SEP_BASE = "https://plato.stanford.edu"
-OUTPUT_FILE = "sep_corpus.txt"
+OUTPUT_FILE = "datasets/sep_corpus.txt"
 MAX_DOC_CHARS = 200_000
 MIN_DOC_CHARS = 2_000
 REQUEST_TIMEOUT = 30
