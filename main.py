@@ -1,6 +1,5 @@
 """
-Training Loop for Atomic Watermelon — Substrate Ablation
-Shared encoder weights. Dual mask. Nothing else.
+Training Loop for Atomic Watermelon
 """
 
 from torch.utils.data import DataLoader, Dataset

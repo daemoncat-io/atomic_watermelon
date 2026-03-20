@@ -1,15 +1,10 @@
 """
-Atomic Watermelon — Substrate Ablation
+Atomic Watermelon
 
-Dual mode shared weight transformer. Nothing else.
-No adapter. No cross-attention. No memory.
+Dual mode shared weight transformer.
 
-Encoder: bidirectional attention over current context
-Decoder: borrows encoder weights directly, causal mask only
-
-This is the floor. Two views of the same weights on the same input,
-differentiated only by masking. If dual-mode behavior survives here,
-shared weights ARE the bridge. Everything else is infrastructure.
+Encoder: bidirectional attention
+Decoder: causal attention
 """
 
 import torch.nn.functional as F
