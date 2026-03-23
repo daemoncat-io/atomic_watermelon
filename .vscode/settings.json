@@ -47,5 +47,14 @@
 		"worldhistory",
 		"wpcnt",
 		"yticklabels"
-	]
+	],
+	"workbench.colorCustomizations": {
+		"sash.hoverBorder": "#1ffdcd",
+		"statusBar.background": "#02e7b5",
+		"statusBar.foreground": "#15202b",
+		"statusBarItem.hoverBackground": "#02b48d",
+		"statusBarItem.remoteBackground": "#02e7b5",
+		"statusBarItem.remoteForeground": "#15202b"
+	},
+	"peacock.remoteColor": "#02e7b5"
 }
