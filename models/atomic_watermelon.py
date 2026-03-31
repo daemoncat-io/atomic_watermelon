@@ -215,14 +215,12 @@ class AtomicWatermelon(nn.Module):
         max_tokens: int = 100,
         top_k: int = 1,
         temperature: float = 1.0,
-        memory: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
         Generate tokens. No memory, just autoregressive generation.
 
         Returns:
             generated: [B, T+max_tokens]
-            memory:    always None
         """
         self.eval()
         generated = x.clone()
