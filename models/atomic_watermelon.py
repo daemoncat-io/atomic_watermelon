@@ -165,7 +165,6 @@ class AtomicWatermelon(nn.Module):
         self,
         x: torch.Tensor,
         targets: torch.Tensor | None = None,
-        memory: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         """
         Forward pass.
@@ -173,12 +172,10 @@ class AtomicWatermelon(nn.Module):
         Args:
             x:       [B, T]    input token ids
             targets: [B, T]    target token ids for loss
-            memory:  ignored, kept for API compatibility
 
         Returns:
             logits:     [B, T, V]
             loss:       scalar or None
-            new_memory: always None
         """
 
         B, T = x.shape
