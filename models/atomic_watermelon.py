@@ -114,10 +114,9 @@ class AtomicWatermelon(nn.Module):
     """
     The floor.
 
-    The encoder owns the weights.
-    The decoder shares the encoder's layers directly.
-    Same input, same weights, different masks.
-    Nothing else.
+    The encoder owns its own weights.
+    The decoder decodes through encoder.
+    Same input, same weights.
     """
 
     def __init__(
