@@ -128,7 +128,7 @@ early training.
 
 ## Framework Structure
 
-\```
+```
 models/
 atomic_watermelon.py # Bridge Transformer
 encoder.py # Encoder-only baseline
@@ -157,7 +157,7 @@ chat_decoder.py # Interactive inference — decoder-only
 dashboard_aw.py # Live training monitor
 
 main.py
-\```
+```
 
 ---
 
