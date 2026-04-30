@@ -124,7 +124,7 @@ class AtomicWatermelon(nn.Module):
         vocab_size: int = 256,
         d_model: int = 512,
         n_layers: int = 6,
-        n_heads: int = 8,
+        n_heads: int = 4,
         d_ff: int = 2048,
         max_seq_len: int = 2048,
         dropout: float = 0.1,
