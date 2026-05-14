@@ -3,6 +3,8 @@
 A shared-weight dual-stream transformer. Bidirectional encoder and causal decoder share
 attention and feedforward weights. Same input, same weights.
 
+This model and its architecture are directly inspired by [AIAYN](https://arxiv.org/abs/1706.03762)
+
 ---
 
 ## Architecture
