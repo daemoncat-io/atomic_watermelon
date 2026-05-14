@@ -2,8 +2,9 @@
 Training Loop for Atomic Watermelon
 """
 
-from torch.utils.data import DataLoader, Dataset
+import torch.multiprocessing as mp
 from pathlib import Path
+import torch.utils.data
 from typing import Any
 from tqdm import tqdm
 import numpy as np
@@ -106,7 +107,7 @@ config: dict[str, Any] = {
 }
 
 
-class TokenDataset(Dataset):
+class TokenDataset(torch.utils.data.Dataset):
     def __init__(self, bin_path: str, context_length: int, vocab_size: int):
         self.bin_path = bin_path
         self.context_length = context_length
@@ -207,9 +208,9 @@ def train():
         prefetch_factor=config["prefetch_factor"],
     )
 
-    train_loader = DataLoader(train_set, shuffle=True, **loader_kwargs)
-    val_loader = DataLoader(val_set, **loader_kwargs)
-    test_loader = DataLoader(test_set, **loader_kwargs)
+    train_loader = torch.utils.data.DataLoader(train_set, shuffle=True, **loader_kwargs)
+    val_loader = torch.utils.data.DataLoader(val_set, **loader_kwargs)
+    test_loader = torch.utils.data.DataLoader(test_set, **loader_kwargs)
 
     model = AtomicWatermelon(
         vocab_size=config["vocab_size"],
@@ -391,7 +392,6 @@ def train():
 
 
 if __name__ == "__main__":
-    import torch.multiprocessing as mp
 
     os.environ["_AW_WORKER"] = "1"
     mp.set_start_method("spawn", force=True)
