@@ -4,12 +4,15 @@ heatmap_bridge.py
 Visualize training activity across every component of every block.
 Shows which subsystems are alive (moved from init) and which are dormant.
 
+For AtomicWatermelon: encoder and decoder share weights — a single set of
+attention + FF parameters per block, used in both bidirectional (encoder)
+and causal (decoder) modes. So there is one "subsystem" per block, not three.
+
 Metric: "drift from initialization"
   - LayerNorm weights: std of weight tensor (init = all 1s, so std = 0 means untrained)
   - LayerNorm bias:    std of bias tensor (init = all 0s)
   - Linear weights:    |current_std - xavier_expected_std| / xavier_expected_std
                        (xavier_uniform_ init has std = sqrt(2 / (fan_in + fan_out)) * sqrt(3))
-  - Combined per-component: max of weight and bias drift signals
 
 Usage:
     python heatmap_bridge.py
@@ -38,7 +41,7 @@ matplotlib.use("Agg")
 # ============================================================
 
 DEVICE = "cpu"  # CPU is fine for weight inspection
-CHECKPOINT_PATH = "atomic_watermelon_20260225_164548_best.pth"
+CHECKPOINT_PATH = "checkpoints/atomic_watermelon_20260513_225950_best.pth"
 TOKENIZER_PATH = "datasets/tokenizer.json"
 OUTPUT_PATH = "visualizations/heatmap_bridge.png"
 
@@ -71,7 +74,6 @@ def ln_drift(module: nn.LayerNorm | None) -> float:
     b = module.bias.detach().float() if module.bias is not None else torch.zeros(1)
 
     # Weight drift: init is all 1s, so std = 0 at init
-    # Also check mean drift from 1.0
     w_std = w.std().item()
     w_mean_drift = abs(w.mean().item() - 1.0)
 
@@ -79,7 +81,6 @@ def ln_drift(module: nn.LayerNorm | None) -> float:
     b_std = b.std().item()
     b_mean_drift = abs(b.mean().item())
 
-    # Combined signal — weight std is the strongest indicator
     return w_std + w_mean_drift + b_std + b_mean_drift
 
 
@@ -98,20 +99,7 @@ def linear_drift(module: nn.Linear | None) -> float:
     if expected_std < 1e-8:
         return 0.0
 
-    # Relative drift from expected
     return abs(current_std - expected_std) / expected_std
-
-
-def adapter_drift(adapter: nn.Module | None) -> dict[str, float]:
-    """Compute drift for each sub-component of an Adapter."""
-    if adapter is None:
-        return {"down": 0.0, "up": 0.0, "ln": 0.0}
-
-    return {
-        "down": linear_drift(getattr(adapter, "down", None)),
-        "up": linear_drift(getattr(adapter, "up", None)),
-        "ln": ln_drift(getattr(adapter, "ln", None)),
-    }
 
 
 # ============================================================
@@ -124,59 +112,31 @@ def extract_block_metrics(
 ) -> list[dict[str, float]]:
     """
     For each block, compute drift metric for every component.
-    Returns list of dicts, one per block.
+    BridgeBlock components: enc_ln1, enc_attn (w_qkv, w_o), enc_ln2, enc_ff (net[0], net[3])
     """
-    blocks = model.blocks
     all_metrics = []
 
-    for i, block in enumerate(blocks):
+    for block in model.blocks:
         m = {}
-
-        # --- Encoder pathway ---
-        m["enc_ln1"] = ln_drift(block.enc_ln1)
-        m["enc_attn_qkv"] = linear_drift(block.enc_attn.w_qkv)
-        m["enc_attn_wo"] = linear_drift(block.enc_attn.w_o)
-        m["enc_ln2"] = ln_drift(block.enc_ln2)
-
-        enc_ff_net = block.enc_ff.net
-        m["enc_ff_w1"] = linear_drift(enc_ff_net[0])
-        m["enc_ff_w2"] = linear_drift(enc_ff_net[3])
-
-        # --- Decoder adapters ---
-        for prefix in ["pre_attn", "post_attn", "pre_ff", "post_ff"]:
-            adapter = getattr(block, f"dec_adapt_{prefix}", None)
-            ad = adapter_drift(adapter)
-            m[f"adapt_{prefix}_down"] = ad["down"]
-            m[f"adapt_{prefix}_up"] = ad["up"]
-            m[f"adapt_{prefix}_ln"] = ad["ln"]
-
-        # --- Cross-attention ---
-        m["cross_wq"] = linear_drift(block.cross_attn.w_q)
-        m["cross_wkv"] = linear_drift(block.cross_attn.w_kv)
-        m["cross_wo"] = linear_drift(block.cross_attn.w_o)
-
-        # --- Cross LN + adapter ---
-        m["cross_ln"] = ln_drift(block.cross_ln)
-
-        cross_adapt = getattr(block, "cross_adapt", None)
-        ca = adapter_drift(cross_adapt)
-        m["cross_adapt_down"] = ca["down"]
-        m["cross_adapt_up"] = ca["up"]
-        m["cross_adapt_ln"] = ca["ln"]
-
+        m["ln1"] = ln_drift(block.enc_ln1)
+        m["qkv"] = linear_drift(block.enc_attn.w_qkv)
+        m["wo"] = linear_drift(block.enc_attn.w_o)
+        m["ln2"] = ln_drift(block.enc_ln2)
+        m["ff1"] = linear_drift(block.enc_ff.net[0])
+        m["ff2"] = linear_drift(block.enc_ff.net[3])
         all_metrics.append(m)
 
     return all_metrics
 
 
 def extract_global_metrics(model: AtomicWatermelon) -> dict[str, float]:
-    """Extract drift metrics for non-block components."""
+    """
+    Extract drift metrics for non-block components.
+    Note: lm_head.weight is tied to tok_emb.weight, so it's covered by tok_emb.
+    """
     m = {}
     m["tok_emb"] = model.tok_emb.weight.detach().float().std().item()
     m["pos_emb"] = model.pos_emb.weight.detach().float().std().item()
-    m["mem_pos_emb"] = model.mem_pos_emb.weight.detach().float().std().item()
-    m["compress_proj"] = linear_drift(model.compress_proj)
-    m["compress_gate"] = linear_drift(model.compress_gate)
     m["ln_f"] = ln_drift(model.ln_f)
     return m
 
@@ -185,52 +145,20 @@ def extract_global_metrics(model: AtomicWatermelon) -> dict[str, float]:
 # VISUALIZATION
 # ============================================================
 
-# Component layout: grouped by subsystem
-# Each tuple: (key_in_metrics, display_label)
-ENCODER_COLS = [
-    ("enc_ln1", "LN₁"),
-    ("enc_attn_qkv", "QKV"),
-    ("enc_attn_wo", "Wₒ"),
-    ("enc_ln2", "LN₂"),
-    ("enc_ff_w1", "FF₁"),
-    ("enc_ff_w2", "FF₂"),
-]
-
-ADAPTER_COLS = [
-    ("adapt_pre_attn_down", "↓"),
-    ("adapt_pre_attn_up", "↑"),
-    ("adapt_pre_attn_ln", "LN"),
-    ("adapt_post_attn_down", "↓"),
-    ("adapt_post_attn_up", "↑"),
-    ("adapt_post_attn_ln", "LN"),
-    ("adapt_pre_ff_down", "↓"),
-    ("adapt_pre_ff_up", "↑"),
-    ("adapt_pre_ff_ln", "LN"),
-    ("adapt_post_ff_down", "↓"),
-    ("adapt_post_ff_up", "↑"),
-    ("adapt_post_ff_ln", "LN"),
-]
-
-CROSS_COLS = [
-    ("cross_wq", "Wq"),
-    ("cross_wkv", "Wkv"),
-    ("cross_wo", "Wₒ"),
-    ("cross_ln", "LN"),
-    ("cross_adapt_down", "↓"),
-    ("cross_adapt_up", "↑"),
-    ("cross_adapt_ln", "LN"),
-]
-
-SUBSYSTEMS = [
-    ("ENCODER", ENCODER_COLS),
-    ("DECODER ADAPTERS", ADAPTER_COLS),
-    ("CROSS-ATTENTION + MEMORY BRIDGE", CROSS_COLS),
+# One subsystem per block — encoder and decoder share these weights.
+BLOCK_COLS = [
+    ("ln1", "LN₁"),
+    ("qkv", "QKV"),
+    ("wo", "Wₒ"),
+    ("ln2", "LN₂"),
+    ("ff1", "FF₁"),
+    ("ff2", "FF₂"),
 ]
 
 
 def build_heatmap_data(
     block_metrics: list[dict[str, float]],
-) -> tuple[np.ndarray, list[str], list[str], list[tuple[int, int, str]]]:
+) -> tuple[np.ndarray, list[str], list[str]]:
     """
     Build the matrix for the heatmap.
 
@@ -238,32 +166,19 @@ def build_heatmap_data(
         data: [n_blocks, n_components] array of drift values
         col_labels: column labels
         row_labels: row labels
-        group_spans: [(start_col, end_col, group_name), ...]
     """
     n_blocks = len(block_metrics)
-
-    all_cols = []
-    group_spans = []
-    col_offset = 0
-
-    for group_name, cols in SUBSYSTEMS:
-        start = col_offset
-        for key, label in cols:
-            all_cols.append((key, label))
-            col_offset += 1
-        group_spans.append((start, col_offset, group_name))
-
-    n_cols = len(all_cols)
+    n_cols = len(BLOCK_COLS)
     data = np.zeros((n_blocks, n_cols))
 
     for row, metrics in enumerate(block_metrics):
-        for col, (key, _) in enumerate(all_cols):
+        for col, (key, _) in enumerate(BLOCK_COLS):
             data[row, col] = metrics.get(key, 0.0)
 
-    col_labels = [label for _, label in all_cols]
+    col_labels = [label for _, label in BLOCK_COLS]
     row_labels = [f"Block {i}" for i in range(n_blocks)]
 
-    return data, col_labels, row_labels, group_spans
+    return data, col_labels, row_labels
 
 
 def render_heatmap(
@@ -273,15 +188,12 @@ def render_heatmap(
     output_path: str,
     checkpoint_path: str,
 ):
-    data, col_labels, row_labels, group_spans = build_heatmap_data(block_metrics)
+    data, col_labels, row_labels = build_heatmap_data(block_metrics)
     n_blocks, n_cols = data.shape
 
     # --- Color mapping ---
-    # Threshold: anything below 0.005 drift is "dormant"
-    # Log scale above that to show variation in trained components
     DORMANT_THRESHOLD = 0.005
 
-    # Custom colormap: black (dead) -> deep blue (barely trained) -> cyan -> yellow -> white (heavily trained)
     colors_list = [
         (0.0, "#0a0a0a"),  # dormant — near black
         (0.01, "#1a0a2e"),  # threshold edge
@@ -298,21 +210,20 @@ def render_heatmap(
         N=256,
     )
 
-    # Normalize data for colormap
-    # Use log1p scaling to handle the huge dynamic range
-    data_log = np.log1p(data * 100)  # scale up then log
+    # log1p scaling to handle dynamic range
+    data_log = np.log1p(data * 100)
     vmax = data_log.max() if data_log.max() > 0 else 1.0
 
     # --- Figure layout ---
-    fig = plt.figure(figsize=(22, 10), facecolor="#0d0d0d")
+    fig = plt.figure(figsize=(12, 9), facecolor="#0d0d0d")
 
     gs = GridSpec(
         3,
         1,
-        height_ratios=[0.12, 1.0, 0.15],
+        height_ratios=[0.14, 1.0, 0.16],
         hspace=0.08,
-        left=0.06,
-        right=0.88,
+        left=0.09,
+        right=0.85,
         top=0.92,
         bottom=0.04,
     )
@@ -327,23 +238,23 @@ def render_heatmap(
     ax_title.text(
         0.0,
         0.85,
-        "CROSS-ATTENTION BRIDGE TRANSFORMER — TRAINING ACTIVITY HEATMAP",
+        "ATOMIC WATERMELON — TRAINING ACTIVITY HEATMAP",
         transform=ax_title.transAxes,
-        fontsize=16,
+        fontsize=15,
         fontweight="bold",
         color="#e0e0e0",
         fontfamily="monospace",
     )
     ax_title.text(
         0.0,
-        0.35,
+        0.40,
         f"checkpoint: {Path(checkpoint_path).name}    "
         f"best epoch: {epoch}    val_loss: {val_loss}    "
         f"params: {config.get('_total_params', '?'):,}    "
         f"d_model: {config.get('d_model', '?')}    "
         f"n_layers: {config.get('n_layers', '?')}    "
-        f"memory_slots: {config.get('memory_slots', '?')}    "
-        f"compress_chunk: {config.get('compress_chunk', '?')}",
+        f"n_heads: {config.get('n_heads', '?')}    "
+        f"d_ff: {config.get('d_ff', '?')}",
         transform=ax_title.transAxes,
         fontsize=8,
         color="#888888",
@@ -351,10 +262,9 @@ def render_heatmap(
     )
     ax_title.text(
         0.0,
-        0.0,
-        "metric: drift from initialization  │  "
-        "LN: |μ-1| + σ(w) + σ(b)  │  "
-        "Linear: |σ_current - σ_xavier| / σ_xavier  │  "
+        0.05,
+        "dual-mode shared weights: encoder (bidirectional) and decoder (causal) "
+        "share parameters per block  │  "
         "dark = dormant (at init)  │  bright = active (trained)",
         transform=ax_title.transAxes,
         fontsize=7,
@@ -375,11 +285,6 @@ def render_heatmap(
         interpolation="nearest",
     )
 
-    # Grid lines between subsystems
-    for start, end, name in group_spans:
-        if start > 0:
-            ax.axvline(x=start - 0.5, color="#333333", linewidth=1.5)
-
     # Row labels
     ax.set_yticks(range(n_blocks))
     ax.set_yticklabels(row_labels, fontsize=10, fontfamily="monospace", color="#cccccc")
@@ -388,56 +293,32 @@ def render_heatmap(
     ax.set_xticks(range(n_cols))
     ax.set_xticklabels(
         col_labels,
-        fontsize=7,
+        fontsize=10,
         fontfamily="monospace",
         color="#aaaaaa",
         rotation=0,
         ha="center",
     )
 
-    # Subsystem group labels (top)
-    for start, end, name in group_spans:
-        mid = (start + end - 1) / 2
-        ax.text(
-            mid,
-            -0.9,
-            name,
-            ha="center",
-            va="bottom",
-            fontsize=8,
-            fontweight="bold",
-            color="#cccccc",
-            fontfamily="monospace",
-        )
-        # Bracket
-        ax.plot(
-            [start - 0.3, end - 0.7],
-            [-0.6, -0.6],
-            color="#555555",
-            linewidth=1,
-            clip_on=False,
-        )
-
-    # Adapter sub-group labels
-    adapter_start = group_spans[1][0]
-    adapter_subgroups = [
-        (adapter_start, adapter_start + 3, "pre_attn"),
-        (adapter_start + 3, adapter_start + 6, "post_attn"),
-        (adapter_start + 6, adapter_start + 9, "pre_ff"),
-        (adapter_start + 9, adapter_start + 12, "post_ff"),
-    ]
-    for s, e, label in adapter_subgroups:
-        mid = (s + e - 1) / 2
-        ax.text(
-            mid,
-            n_blocks + 0.1,
-            label.replace("_", " "),
-            ha="center",
-            va="top",
-            fontsize=6,
-            color="#777777",
-            fontfamily="monospace",
-        )
+    # Single subsystem label at top
+    ax.text(
+        (n_cols - 1) / 2,
+        -0.85,
+        "SHARED ENCODER / DECODER BLOCK",
+        ha="center",
+        va="bottom",
+        fontsize=9,
+        fontweight="bold",
+        color="#cccccc",
+        fontfamily="monospace",
+    )
+    ax.plot(
+        [-0.3, n_cols - 0.7],
+        [-0.55, -0.55],
+        color="#555555",
+        linewidth=1,
+        clip_on=False,
+    )
 
     # Annotate cells with raw drift values
     for row in range(n_blocks):
@@ -459,7 +340,7 @@ def render_heatmap(
                 text,
                 ha="center",
                 va="center",
-                fontsize=5.5,
+                fontsize=8,
                 color=color,
                 fontfamily="monospace",
                 fontweight="bold" if val >= 0.05 else "normal",
@@ -470,7 +351,7 @@ def render_heatmap(
     ax.tick_params(axis="both", which="both", length=0)
 
     # Colorbar
-    cbar_ax = fig.add_axes([0.90, 0.18, 0.015, 0.65])
+    cbar_ax = fig.add_axes([0.87, 0.18, 0.018, 0.65])
     cbar = fig.colorbar(im, cax=cbar_ax)
     cbar.ax.tick_params(labelsize=7, colors="#888888")
     cbar.set_label(
@@ -486,7 +367,6 @@ def render_heatmap(
     global_text = "GLOBAL:  "
     for key, val in global_metrics.items():
         status = "●" if val > DORMANT_THRESHOLD else "○"
-        color_tag = "active" if val > DORMANT_THRESHOLD else "dormant"
         global_text += f"  {key}={val:.4f} [{status}]    "
 
     ax_global.text(
@@ -494,38 +374,34 @@ def render_heatmap(
         0.7,
         global_text,
         transform=ax_global.transAxes,
-        fontsize=7,
+        fontsize=8,
         color="#999999",
         fontfamily="monospace",
     )
 
-    # Summary verdict
-    all_cross = []
-    all_encoder = []
-    all_adapter = []
+    # Verdict — bucket by component family
+    all_attn, all_ff, all_ln = [], [], []
     for metrics in block_metrics:
-        for k, v in metrics.items():
-            if k.startswith("cross_"):
-                all_cross.append(v)
-            elif k.startswith("enc_"):
-                all_encoder.append(v)
-            elif k.startswith("adapt_"):
-                all_adapter.append(v)
+        all_attn.extend([metrics["qkv"], metrics["wo"]])
+        all_ff.extend([metrics["ff1"], metrics["ff2"]])
+        all_ln.extend([metrics["ln1"], metrics["ln2"]])
 
-    enc_mean = np.mean(all_encoder) if all_encoder else 0
-    adapt_mean = np.mean(all_adapter) if all_adapter else 0
-    cross_mean = np.mean(all_cross) if all_cross else 0
-    cross_dormant = sum(1 for v in all_cross if v < DORMANT_THRESHOLD)
-    cross_total = len(all_cross)
+    attn_mean = float(np.mean(all_attn)) if all_attn else 0.0
+    ff_mean = float(np.mean(all_ff)) if all_ff else 0.0
+    ln_mean = float(np.mean(all_ln)) if all_ln else 0.0
 
-    verdict_color = "#ff4444" if cross_mean < DORMANT_THRESHOLD else "#44ff44"
+    all_components = all_attn + all_ff + all_ln
+    dormant = sum(1 for v in all_components if v < DORMANT_THRESHOLD)
+    total = len(all_components)
+
+    verdict_color = "#ff4444" if dormant > total * 0.5 else "#44ff44"
     ax_global.text(
         0.0,
         0.15,
-        f"ENCODER avg drift: {enc_mean:.4f}    "
-        f"ADAPTER avg drift: {adapt_mean:.4f}    "
-        f"CROSS-ATTN avg drift: {cross_mean:.4f}  "
-        f"({cross_dormant}/{cross_total} components dormant)",
+        f"ATTN avg drift: {attn_mean:.4f}    "
+        f"FF avg drift: {ff_mean:.4f}    "
+        f"LN avg drift: {ln_mean:.4f}    "
+        f"({dormant}/{total} block components dormant)",
         transform=ax_global.transAxes,
         fontsize=8,
         color=verdict_color,
@@ -559,9 +435,6 @@ def main(
         d_ff=cfg["d_ff"],
         max_seq_len=cfg["context_length"],
         dropout=cfg["dropout"],
-        memory_slots=cfg["memory_slots"],
-        compress_chunk=cfg["compress_chunk"],
-        adapter_bottleneck=cfg["adapter_bottleneck"],
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
@@ -580,26 +453,16 @@ def main(
 
     # Print summary
     print(f"\n{'='*60}")
-    print("DRIFT FROM INITIALIZATION — PER SUBSYSTEM")
+    print("DRIFT FROM INITIALIZATION — PER BLOCK")
     print(f"{'='*60}")
 
     for i, metrics in enumerate(block_metrics):
-        enc_vals = [v for k, v in metrics.items() if k.startswith("enc_")]
-        adapt_vals = [v for k, v in metrics.items() if k.startswith("adapt_")]
-        cross_vals = [v for k, v in metrics.items() if k.startswith("cross_")]
-
-        enc_status = "ACTIVE" if np.mean(enc_vals) > 0.005 else "DORMANT"
-        adapt_status = "ACTIVE" if np.mean(adapt_vals) > 0.005 else "DORMANT"
-        cross_status = "ACTIVE" if np.mean(cross_vals) > 0.005 else "DORMANT"
-
-        print(f"\n  Block {i}:")
-        print(f"    Encoder:    {enc_status:8s}  (avg drift: {np.mean(enc_vals):.4f})")
-        print(
-            f"    Adapters:   {adapt_status:8s}  (avg drift: {np.mean(adapt_vals):.4f})"
-        )
-        print(
-            f"    Cross-attn: {cross_status:8s}  (avg drift: {np.mean(cross_vals):.4f})"
-        )
+        all_vals = list(metrics.values())
+        status = "ACTIVE" if np.mean(all_vals) > 0.005 else "DORMANT"
+        print(f"\n  Block {i}: {status}")
+        print(f"    Attn: qkv={metrics['qkv']:.4f}  wo={metrics['wo']:.4f}")
+        print(f"    FF:   ff1={metrics['ff1']:.4f}  ff2={metrics['ff2']:.4f}")
+        print(f"    LN:   ln1={metrics['ln1']:.4f}  ln2={metrics['ln2']:.4f}")
 
     print(f"\n  Global:")
     for k, v in global_metrics.items():
@@ -626,7 +489,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Heatmap of bridge transformer training activity"
+        description="Heatmap of atomic watermelon training activity"
     )
     parser.add_argument("--checkpoint", "-c", default=CHECKPOINT_PATH)
     parser.add_argument("--output", "-o", default=OUTPUT_PATH)
