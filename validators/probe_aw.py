@@ -1,10 +1,18 @@
 """
-probe_bridge_atomic_watermelon.py
+probe_aw.py
 
 Introspect AtomicWatermelon models. Extract attention patterns,
 embedding topology, weight statistics, generation behavior. Output to CLI and JSON.
 
-No frameworks. No dependencies beyond torch and matplotlib.
+NOTE: AtomicWatermelon is a dual-stream shared-weight transformer:
+    - blocks live in `model.blocks` (BridgeBlock instances)
+    - each block shares ONE set of weights between the encoder (bidirectional)
+      and decoder (causal) streams: enc_attn / enc_ln1 / enc_ln2 / enc_ff
+    - there is NO memory, NO cross-attention, NO adapters, NO compression.
+    - forward signature is forward(x, targets=None) -> (logits, loss, None)
+
+MultiHeadAttention does not expose attention weights, so this probe
+monkeypatches its forward at runtime to stash them for visualization.
 """
 
 import torch.nn.functional as F
@@ -16,9 +24,10 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+import math
 import json
 
-from models.atomic_watermelon import AtomicWatermelon
+from models.atomic_watermelon import AtomicWatermelon, MultiHeadAttention
 from datasets.bpe import BPETokenizer
 
 matplotlib.use("Agg")
@@ -30,7 +39,7 @@ matplotlib.use("Agg")
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 TOKENIZER_PATH = "datasets/tokenizer.json"
 OUTPUT_DIR = Path("probe_results")
-CHECKPOINT_PATH = ""
+CHECKPOINT_PATH = "checkpoints/atomic_watermelon_20260513_225950_best.pth"
 
 
 # ============================================================
@@ -67,8 +76,8 @@ class EmbeddingProbe:
 
 @dataclass
 class AttentionPattern:
-    layer_idx: int
-    attn_type: str  # "self" | "cross" | "memory_compress"
+    block_idx: int
+    stream: str  # "enc" (bidirectional) | "dec" (causal)
     head_idx: int | None
     input_text: str
     pattern_shape: tuple[int, ...]
@@ -84,24 +93,13 @@ class GenerationSample:
 
 @dataclass
 class LayerStats:
-    layer_idx: int
-    ln1_weight_mean: float
-    ln2_weight_mean: float
-    self_attn_qkv_norm: float | None
-    cross_attn_q_norm: float | None
-    cross_attn_kv_norm: float | None
+    block_idx: int
+    enc_ln1_weight_mean: float
+    enc_ln2_weight_mean: float
+    attn_qkv_norm: float | None
+    attn_o_norm: float | None
     ff_w1_norm: float | None
-    adapter_down_norm: float | None
-    adapter_up_norm: float | None
-
-
-@dataclass
-class MemoryStats:
-    memory_slots: int
-    compress_chunk: int
-    adapter_bottleneck: int
-    memory_state_shape: tuple[int, ...] | None
-    memory_norm: float | None
+    ff_w2_norm: float | None
 
 
 @dataclass
@@ -119,7 +117,6 @@ class ProbeResults:
     attention_patterns: list[AttentionPattern] = field(default_factory=list)
     generation_samples: list[GenerationSample] = field(default_factory=list)
     layer_stats: list[LayerStats] = field(default_factory=list)
-    memory_stats: MemoryStats | None = None
     attention_visualizations: list[str] = field(default_factory=list)
 
 
@@ -132,6 +129,9 @@ def load_model(checkpoint_path: str, device: str) -> tuple[AtomicWatermelon, dic
     """
     Load model from checkpoint. Config lives in the checkpoint.
     Returns (model, config).
+
+    Only reads keys that AtomicWatermelon actually accepts. `max_seq_len`
+    is read with a `context_length` fallback for older checkpoints.
     """
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     cfg = checkpoint["config"]
@@ -142,11 +142,8 @@ def load_model(checkpoint_path: str, device: str) -> tuple[AtomicWatermelon, dic
         n_layers=cfg["n_layers"],
         n_heads=cfg["n_heads"],
         d_ff=cfg["d_ff"],
-        max_seq_len=cfg["context_length"],
-        dropout=cfg["dropout"],
-        memory_slots=cfg["memory_slots"],
-        compress_chunk=cfg["compress_chunk"],
-        adapter_bottleneck=cfg["adapter_bottleneck"],
+        max_seq_len=cfg.get("max_seq_len", cfg.get("context_length", 2048)),
+        dropout=cfg.get("dropout", 0.1),
     )
     model.load_state_dict(checkpoint["model_state_dict"])
 
@@ -193,11 +190,11 @@ def print_weight_stats(stats: list[WeightStats]):
     components: dict[str, list[WeightStats]] = {}
     for s in stats:
         prefix = s.name.split(".")[0]
-        if "layers" in s.name:
-            # Extract layer component: layers.0.self_attn -> self_attn
+        if "blocks" in s.name:
+            # Extract block component: blocks.0.enc_attn -> blocks.*.enc_attn
             parts = s.name.split(".")
             if len(parts) >= 3:
-                prefix = f"layers.*.{parts[2]}"
+                prefix = f"blocks.*.{parts[2]}"
         components.setdefault(prefix, []).append(s)
 
     for component, entries in components.items():
@@ -305,117 +302,114 @@ def print_embedding_probes(probes: list[EmbeddingProbe]):
 # ============================================================
 # ATTENTION EXTRACTION
 # ============================================================
+#
+# MultiHeadAttention computes softmax weights internally and discards them.
+# We monkeypatch its forward at probe time so each call stashes the most
+# recent attention weights on the module as `.attn_weights`. The dual-stream
+# BridgeBlock calls the SAME enc_attn module twice per forward (once for the
+# encoder/bidirectional stream, once for the decoder/causal stream), so we
+# capture both invocations and tell them apart by whether a mask was passed.
+
+
+def _patched_attention_forward(self, x, mask=None):
+    """Drop-in replacement for MultiHeadAttention.forward that stashes weights."""
+    B, T, C = x.shape
+
+    qkv = self.w_qkv(x).reshape(B, T, 3, self.n_heads, self.d_k).permute(2, 0, 3, 1, 4)
+    q, k, v = qkv[0], qkv[1], qkv[2]
+
+    attn = (q @ k.transpose(-2, -1)) / math.sqrt(self.d_k)
+    if mask is not None:
+        attn = attn.masked_fill(mask == 0, float("-inf"))
+    attn = F.softmax(attn, dim=-1)
+
+    # Stash a detached copy. mask is None for the encoder (bidirectional)
+    # stream, present for the decoder (causal) stream.
+    self._captured_attn = attn.detach().cpu()
+    self._captured_causal = mask is not None
+
+    attn = self.dropout(attn)
+    out = (attn @ v).transpose(1, 2).reshape(B, T, C)
+    return self.w_o(out)
 
 
 def extract_attention_patterns(
     model: AtomicWatermelon,
     input_ids: torch.Tensor,
-    memory: torch.Tensor | None,
-    layer_indices: list[int],
-) -> tuple[list[AttentionPattern], dict[str, torch.Tensor], torch.Tensor | None]:
+    block_indices: list[int],
+) -> tuple[list[AttentionPattern], dict[str, torch.Tensor]]:
     """
-    Extract self-attention and cross-attention weights from specified layers.
+    Run one forward pass and capture self-attention weights from the encoder
+    (bidirectional) and decoder (causal) streams of the requested blocks.
 
-    Hooks into the forward pass. Returns patterns metadata, raw tensors keyed
-    by "L{layer}_{type}", and updated memory state.
+    Returns (patterns metadata, raw tensors keyed by "B{block}_{stream}").
     """
     patterns: list[AttentionPattern] = []
     raw_tensors: dict[str, torch.Tensor] = {}
-    captured: dict[str, list[torch.Tensor]] = {}
 
+    blocks = getattr(model, "blocks", None)
+    if blocks is None:
+        print("  ⚠️  Model has no `blocks` attribute")
+        return patterns, raw_tensors
+
+    # Monkeypatch MultiHeadAttention.forward globally for the duration of the pass.
+    original_forward = MultiHeadAttention.forward
+    MultiHeadAttention.forward = _patched_attention_forward
+
+    # Per-block capture: enc_attn is shared, so we need to intercept each of
+    # its two calls. We do that by wrapping the block's enc_attn with a small
+    # recording shim via a forward hook that reads the freshly-stashed weights.
+    captured: dict[str, torch.Tensor] = {}
     hooks = []
 
-    # Walk the model to find attention modules in target layers
-    if hasattr(model, "layers"):
-        for layer_idx in layer_indices:
-            if layer_idx >= len(model.layers):
-                continue
+    def make_hook(block_idx: int):
+        def hook_fn(mod, inp, out):
+            attn = getattr(mod, "_captured_attn", None)
+            if attn is None:
+                return
+            stream = "dec" if getattr(mod, "_captured_causal", False) else "enc"
+            key = f"B{block_idx}_{stream}"
+            # squeeze batch dim -> [n_heads, q, kv]
+            captured[key] = attn.squeeze(0)
 
-            layer = model.layers[layer_idx]
+        return hook_fn
 
-            # Hook self-attention
-            self_attn = _get_attr_chain(layer, ["self_attn", "attn", "attention"])
-            if self_attn is not None:
-                key = f"L{layer_idx}_self"
-                hooks.append(_register_attn_hook(self_attn, key, captured))
+    target = set(i for i in block_indices if 0 <= i < len(blocks))
+    for idx in target:
+        h = blocks[idx].enc_attn.register_forward_hook(make_hook(idx))
+        hooks.append(h)
 
-            # Hook cross-attention (memory attention)
-            cross_attn = _get_attr_chain(
-                layer, ["cross_attn", "memory_attn", "mem_attn"]
-            )
-            if cross_attn is not None:
-                key = f"L{layer_idx}_cross"
-                hooks.append(_register_attn_hook(cross_attn, key, captured))
+    try:
+        with torch.no_grad():
+            model(input_ids)  # forward(x, targets=None) -> (logits, loss, None)
+    except Exception as e:
+        print(f"  ⚠️  Forward pass failed: {e}")
+    finally:
+        for h in hooks:
+            h.remove()
+        MultiHeadAttention.forward = original_forward
+        # Clean up stashed attrs
+        for idx in target:
+            mod = blocks[idx].enc_attn
+            for attr in ("_captured_attn", "_captured_causal"):
+                if hasattr(mod, attr):
+                    delattr(mod, attr)
 
-    # Forward pass with memory
-    with torch.no_grad():
-        try:
-            logits, _, new_memory = model(input_ids, memory=memory)
-        except Exception as e:
-            print(f"  ⚠️  Forward pass failed: {e}")
-            new_memory = memory
-
-    # Clean up hooks
-    for h in hooks:
-        h.remove()
-
-    # Package results
-    seq_len = input_ids.shape[1]
-    for key, tensors in captured.items():
-        if not tensors:
-            continue
-
-        attn_weights = tensors[0].squeeze(0)  # Remove batch dim
+    for key, attn_weights in captured.items():
         raw_tensors[key] = attn_weights
-
-        parts = key.split("_", 1)
-        layer_idx = int(parts[0][1:])
-        attn_type = parts[1] if len(parts) > 1 else "self"
-
+        block_idx = int(key.split("_", 1)[0][1:])
+        stream = key.split("_", 1)[1]
         patterns.append(
             AttentionPattern(
-                layer_idx=layer_idx,
-                attn_type=attn_type,
+                block_idx=block_idx,
+                stream=stream,
                 head_idx=None,
                 input_text="",  # filled by caller
                 pattern_shape=tuple(attn_weights.shape),
             )
         )
 
-    return patterns, raw_tensors, new_memory
-
-
-def _get_attr_chain(obj: Any, names: list[str]) -> Any:
-    """Try multiple attribute names, return first that exists."""
-    for name in names:
-        val = getattr(obj, name, None)
-        if val is not None:
-            return val
-    return None
-
-
-def _register_attn_hook(
-    module: torch.nn.Module,
-    key: str,
-    captured: dict[str, list[torch.Tensor]],
-) -> torch.utils.hooks.RemovableHook:
-    """Register a forward hook that captures attention weights."""
-    captured[key] = []
-
-    def hook_fn(mod, inp, out):
-        # Convention 1: module stores .attn_weights after forward
-        if hasattr(mod, "attn_weights") and mod.attn_weights is not None:
-            captured[key].append(mod.attn_weights.detach().cpu())
-            return
-
-        # Convention 2: output is (output, attn_weights) tuple
-        if isinstance(out, tuple) and len(out) > 1:
-            candidate = out[1]
-            if isinstance(candidate, torch.Tensor) and candidate.dim() >= 2:
-                captured[key].append(candidate.detach().cpu())
-                return
-
-    return module.register_forward_hook(hook_fn)
+    return patterns, raw_tensors
 
 
 def visualize_attention(
@@ -506,7 +500,7 @@ def test_generation(
     top_k: int = 40,
     temperature: float = 0.8,
 ) -> list[GenerationSample]:
-    """Test model generation. Matches training loop generate() signature."""
+    """Test model generation. Matches model.generate() signature."""
     results = []
     model.eval()
 
@@ -558,17 +552,19 @@ def print_generation_samples(samples: list[GenerationSample]):
 
 
 def analyze_layers(model: AtomicWatermelon) -> list[LayerStats]:
-    """Extract per-layer statistics including cross-attention and adapter norms."""
+    """
+    Extract per-block statistics. Each BridgeBlock shares one set of weights
+    between the encoder and decoder streams: enc_ln1, enc_attn, enc_ln2, enc_ff.
+    """
     results = []
 
-    layers = getattr(model, "layers", None)
-    if layers is None:
+    blocks = getattr(model, "blocks", None)
+    if blocks is None:
         return results
 
-    for i, layer in enumerate(layers):
-        # Layer norms
-        ln1 = _get_attr_chain(layer, ["ln1", "norm1", "ln_self"])
-        ln2 = _get_attr_chain(layer, ["ln2", "norm2", "ln_ff"])
+    for i, block in enumerate(blocks):
+        ln1 = getattr(block, "enc_ln1", None)
+        ln2 = getattr(block, "enc_ln2", None)
 
         ln1_mean = (
             ln1.weight.mean().item()
@@ -581,35 +577,24 @@ def analyze_layers(model: AtomicWatermelon) -> list[LayerStats]:
             else 0.0
         )
 
-        # Self-attention
-        self_attn = _get_attr_chain(layer, ["self_attn", "attn"])
-        self_qkv_norm = _param_norm(self_attn, ["qkv", "in_proj", "q_proj", "W_q"])
+        attn = getattr(block, "enc_attn", None)
+        qkv_norm = _param_norm(attn, ["w_qkv"])
+        o_norm = _param_norm(attn, ["w_o"])
 
-        # Cross-attention
-        cross_attn = _get_attr_chain(layer, ["cross_attn", "memory_attn", "mem_attn"])
-        cross_q_norm = _param_norm(cross_attn, ["q_proj", "W_q", "query"])
-        cross_kv_norm = _param_norm(cross_attn, ["kv_proj", "W_kv", "key"])
-
-        # Feedforward
-        ff = _get_attr_chain(layer, ["ff", "mlp", "feedforward"])
-        ff_w1_norm = _param_norm(ff, ["w1", "fc1", "c_fc", "linear1"])
-
-        # Adapter
-        adapter = _get_attr_chain(layer, ["adapter", "bottleneck"])
-        adapter_down = _param_norm(adapter, ["down", "down_proj", "W_down"])
-        adapter_up = _param_norm(adapter, ["up", "up_proj", "W_up"])
+        # FeedForward stores layers in a Sequential `net`: [Linear, GELU, Dropout, Linear]
+        ff = getattr(block, "enc_ff", None)
+        ff_w1_norm = _seq_linear_norm(ff, 0)
+        ff_w2_norm = _seq_linear_norm(ff, -1)
 
         results.append(
             LayerStats(
-                layer_idx=i,
-                ln1_weight_mean=ln1_mean,
-                ln2_weight_mean=ln2_mean,
-                self_attn_qkv_norm=self_qkv_norm,
-                cross_attn_q_norm=cross_q_norm,
-                cross_attn_kv_norm=cross_kv_norm,
+                block_idx=i,
+                enc_ln1_weight_mean=ln1_mean,
+                enc_ln2_weight_mean=ln2_mean,
+                attn_qkv_norm=qkv_norm,
+                attn_o_norm=o_norm,
                 ff_w1_norm=ff_w1_norm,
-                adapter_down_norm=adapter_down,
-                adapter_up_norm=adapter_up,
+                ff_w2_norm=ff_w2_norm,
             )
         )
 
@@ -617,7 +602,7 @@ def analyze_layers(model: AtomicWatermelon) -> list[LayerStats]:
 
 
 def _param_norm(module: Any, names: list[str]) -> float | None:
-    """Get weight norm from first matching parameter name in module."""
+    """Get weight norm from first matching submodule/parameter name in module."""
     if module is None:
         return None
     for name in names:
@@ -632,84 +617,94 @@ def _param_norm(module: Any, names: list[str]) -> float | None:
     return None
 
 
+def _seq_linear_norm(ff: Any, which: int) -> float | None:
+    """Weight norm of the `which`-th Linear inside FeedForward.net."""
+    if ff is None:
+        return None
+    net = getattr(ff, "net", None)
+    if net is None:
+        return None
+    linears = [m for m in net if isinstance(m, torch.nn.Linear)]
+    if not linears:
+        return None
+    try:
+        return linears[which].weight.norm().item()
+    except IndexError:
+        return None
+
+
 def print_layer_stats(stats: list[LayerStats]):
     """CLI output for layer analysis."""
     print("\n" + "=" * 70)
-    print("LAYER ANALYSIS")
+    print("LAYER ANALYSIS (shared enc/dec weights per block)")
     print("=" * 70)
 
     for s in stats:
-        print(f"\nLayer {s.layer_idx}:")
-        print(f"  ln1 weight mean:    {s.ln1_weight_mean:.4f}")
-        print(f"  ln2 weight mean:    {s.ln2_weight_mean:.4f}")
-        if s.self_attn_qkv_norm is not None:
-            print(f"  self-attn qkv norm: {s.self_attn_qkv_norm:.4f}")
-        if s.cross_attn_q_norm is not None:
-            print(f"  cross-attn Q norm:  {s.cross_attn_q_norm:.4f}")
-        if s.cross_attn_kv_norm is not None:
-            print(f"  cross-attn KV norm: {s.cross_attn_kv_norm:.4f}")
+        print(f"\nBlock {s.block_idx}:")
+        print(f"  enc_ln1 weight mean: {s.enc_ln1_weight_mean:.4f}")
+        print(f"  enc_ln2 weight mean: {s.enc_ln2_weight_mean:.4f}")
+        if s.attn_qkv_norm is not None:
+            print(f"  attn w_qkv norm:     {s.attn_qkv_norm:.4f}")
+        if s.attn_o_norm is not None:
+            print(f"  attn w_o norm:       {s.attn_o_norm:.4f}")
         if s.ff_w1_norm is not None:
-            print(f"  ff w1 norm:         {s.ff_w1_norm:.4f}")
-        if s.adapter_down_norm is not None:
-            print(f"  adapter down norm:  {s.adapter_down_norm:.4f}")
-        if s.adapter_up_norm is not None:
-            print(f"  adapter up norm:    {s.adapter_up_norm:.4f}")
+            print(f"  ff linear1 norm:     {s.ff_w1_norm:.4f}")
+        if s.ff_w2_norm is not None:
+            print(f"  ff linear2 norm:     {s.ff_w2_norm:.4f}")
 
 
 # ============================================================
-# MEMORY ANALYSIS
+# DUAL-STREAM ANALYSIS
 # ============================================================
 
 
-def analyze_memory(
+def analyze_dual_stream(
     model: AtomicWatermelon,
     tokenizer: BPETokenizer,
     device: str,
-    cfg: dict,
-) -> MemoryStats:
+) -> dict[str, Any]:
     """
-    Run a forward pass and inspect the resulting memory state.
+    AtomicWatermelon has no memory. Instead, characterize the dual-stream
+    design: run one forward pass and report how divergent the encoder
+    (bidirectional) and decoder (causal) attention patterns are at block 0,
+    using the shared enc_attn module.
     """
-    # Encode a representative chunk to prime memory
     test_text = "The mind is not the brain. Experience is something else."
     token_ids = tokenizer.encode(test_text)
     x = torch.tensor([token_ids]).to(device)
 
-    memory = None
-    with torch.no_grad():
-        try:
-            _, _, memory = model(x, memory=memory)
-        except Exception as e:
-            print(f"  ⚠️  Memory extraction failed: {e}")
+    info: dict[str, Any] = {
+        "n_blocks": len(getattr(model, "blocks", [])),
+        "shared_weights": True,
+        "encoder_attention": "bidirectional",
+        "decoder_attention": "causal",
+    }
 
-    mem_shape = None
-    mem_norm = None
-    if memory is not None:
-        mem_shape = tuple(memory.shape)
-        mem_norm = memory.norm().item()
+    patterns, raw = extract_attention_patterns(model, x, block_indices=[0])
+    enc = raw.get("B0_enc")
+    dec = raw.get("B0_dec")
+    if enc is not None and dec is not None and enc.shape == dec.shape:
+        diff = (enc - dec).norm().item()
+        info["block0_enc_dec_attn_l2_diff"] = diff
+        info["block0_attn_shape"] = tuple(enc.shape)
 
-    return MemoryStats(
-        memory_slots=cfg.get("memory_slots", 0),
-        compress_chunk=cfg.get("compress_chunk", 0),
-        adapter_bottleneck=cfg.get("adapter_bottleneck", 0),
-        memory_state_shape=mem_shape,
-        memory_norm=mem_norm,
-    )
+    return info
 
 
-def print_memory_stats(stats: MemoryStats):
-    """CLI output for memory analysis."""
+def print_dual_stream(info: dict[str, Any]):
+    """CLI output for dual-stream analysis."""
     print("\n" + "=" * 70)
-    print("MEMORY ANALYSIS")
+    print("DUAL-STREAM ANALYSIS")
     print("=" * 70)
-    print(f"  Slots:              {stats.memory_slots}")
-    print(f"  Compress chunk:     {stats.compress_chunk}")
-    print(f"  Adapter bottleneck: {stats.adapter_bottleneck}")
-    if stats.memory_state_shape is not None:
-        print(f"  Memory shape:       {stats.memory_state_shape}")
-        print(f"  Memory L2 norm:     {stats.memory_norm:.4f}")
+    print(f"  Blocks:             {info.get('n_blocks')}")
+    print(f"  Shared weights:     {info.get('shared_weights')}")
+    print(f"  Encoder attention:  {info.get('encoder_attention')}")
+    print(f"  Decoder attention:  {info.get('decoder_attention')}")
+    if "block0_enc_dec_attn_l2_diff" in info:
+        print(f"  Block0 attn shape:  {info['block0_attn_shape']}")
+        print(f"  Block0 enc/dec L2:  {info['block0_enc_dec_attn_l2_diff']:.4f}")
     else:
-        print("  ⚠️  No memory state produced")
+        print("  ⚠️  Could not compare enc/dec attention at block 0")
 
 
 # ============================================================
@@ -754,12 +749,12 @@ def probe(
     tokenizer_path: str = TOKENIZER_PATH,
     embedding_queries: list[str] | None = None,
     test_prompts: list[str] | None = None,
-    attention_layers: list[int] | None = None,
+    attention_blocks: list[int] | None = None,
     attention_text: str = "The mind is not the brain. Experience is something else entirely.",
     max_gen_tokens: int = 144,
 ) -> ProbeResults:
     """
-    Run complete probe on a AtomicWatermelon.
+    Run complete probe on an AtomicWatermelon.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
@@ -792,8 +787,8 @@ def probe(
             "The Analytical Engine has no pretensions whatever to ",
             "Something it is like to feel ",
         ]
-    if attention_layers is None:
-        attention_layers = [0, 2, 5]
+    if attention_blocks is None:
+        attention_blocks = [0, 2, 5]
 
     # Load tokenizer
     tokenizer = BPETokenizer.load(tokenizer_path)
@@ -827,9 +822,9 @@ def probe(
     results.layer_stats = analyze_layers(model)
     print_layer_stats(results.layer_stats)
 
-    # 3. Memory analysis
-    results.memory_stats = analyze_memory(model, tokenizer, DEVICE, cfg)
-    print_memory_stats(results.memory_stats)
+    # 3. Dual-stream analysis (replaces the memory analysis; model has no memory)
+    dual = analyze_dual_stream(model, tokenizer, DEVICE)
+    print_dual_stream(dual)
 
     # 4. Embedding space
     results.embedding_probes = probe_embeddings(model, tokenizer, embedding_queries)
@@ -845,11 +840,10 @@ def probe(
     print(f"  Input: {attention_text!r}")
     print(f"  Tokens: {len(token_ids)}")
 
-    attn_patterns, raw_tensors, _ = extract_attention_patterns(
+    attn_patterns, raw_tensors = extract_attention_patterns(
         model,
         input_ids,
-        memory=None,
-        layer_indices=attention_layers,
+        block_indices=attention_blocks,
     )
 
     for pattern in attn_patterns:
@@ -877,12 +871,7 @@ def probe(
         print(f"    Visualization -> {saved_path}")
 
     if not raw_tensors:
-        print(
-            "  ⚠️  No attention weights captured. Model may not expose them via hooks."
-        )
-        print(
-            "      Check if attention modules store .attn_weights or return (out, weights) tuples."
-        )
+        print("  ⚠️  No attention weights captured.")
 
     # 6. Generation tests
     results.generation_samples = test_generation(
@@ -938,12 +927,12 @@ if __name__ == "__main__":
         help="Text for attention analysis",
     )
     parser.add_argument(
-        "--layers",
-        "-l",
+        "--blocks",
+        "-b",
         type=int,
         nargs="+",
         default=[0, 2, 5],
-        help="Layer indices for attention extraction",
+        help="Block indices for attention extraction",
     )
     parser.add_argument(
         "--max-tokens",
@@ -959,6 +948,6 @@ if __name__ == "__main__":
         output_dir=Path(args.output),
         tokenizer_path=args.tokenizer,
         attention_text=args.text,
-        attention_layers=args.layers,
+        attention_blocks=args.blocks,
         max_gen_tokens=args.max_tokens,
     )

@@ -12,12 +12,12 @@ Metric: "drift from initialization"
   - LayerNorm weights: std of weight tensor (init = all 1s, so std = 0 means untrained)
   - LayerNorm bias:    std of bias tensor (init = all 0s)
   - Linear weights:    |current_std - xavier_expected_std| / xavier_expected_std
-                       (xavier_uniform_ init has std = sqrt(2 / (fan_in + fan_out)) * sqrt(3))
+(xavier_uniform_ init has std = sqrt(2 / (fan_in + fan_out)) * sqrt(3))
 
 Usage:
-    python heatmap_bridge.py
-    python heatmap_bridge.py -c checkpoints/atomic_watermelon_20260225_164548_best.pth
-    python heatmap_bridge.py -c checkpoints/my_run_best.pth -o my_heatmap.png
+  python heatmap_bridge.py
+  python heatmap_bridge.py -c checkpoints/atomic_watermelon_20260225_164548_best.pth
+  python heatmap_bridge.py -c checkpoints/my_run_best.pth -o my_heatmap.png
 """
 
 import torch.nn as nn
