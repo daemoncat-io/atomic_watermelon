@@ -1,4 +1,4 @@
-# Atomic Watermelon
+# Atomic Watermelon !!!BROKEN!!!
 
 A shared-weight dual-stream transformer. Bidirectional encoder and causal decoder share
 attention and feedforward weights. Same input, same weights.
